@@ -20,15 +20,17 @@ def _num(value: Any, default: float = 0.0) -> float:
 def final_derivatives_options_gate(
     derivatives: dict[str, Any] | None,
     expiry: dict[str, Any] | None,
+    expiry_market_data: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Check current futures/perpetual and listed-options evidence before a trade.
 
-    Futures evidence is expected for crypto candidates. Options are checked when
-    the exchange exposes them; an asset without listed options is explicitly
-    marked NOT_AVAILABLE rather than treated as a bullish/bearish signal.
+    Futures evidence is checked for every candidate. Listed options are checked
+    from the raw exchange chain whenever the exchange exposes option contracts.
+    Missing options are explicitly NOT_AVAILABLE, never a fake positive signal.
     """
     d = derivatives if isinstance(derivatives, dict) else {}
     e = expiry if isinstance(expiry, dict) else {}
+    raw = expiry_market_data if isinstance(expiry_market_data, dict) else {}
     blockers: list[str] = []
     warnings: list[str] = []
 
@@ -55,8 +57,19 @@ def final_derivatives_options_gate(
         if abs(basis) > 1.0:
             warnings.append("futures basis is unusually wide")
 
-    option_count = int(_num(e.get("options_count", 0)))
-    option_usable = int(_num(e.get("options_usable_instruments", 0)))
+    raw_instruments = raw.get("instruments") if isinstance(raw.get("instruments"), list) else []
+    option_chain = [
+        item for item in raw_instruments
+        if isinstance(item, dict) and (item.get("option") or item.get("optionType") or item.get("option_type"))
+    ]
+    option_count = len(option_chain)
+    option_usable = sum(1 for item in option_chain if _num(item.get("open_interest")) > 0 and _num(item.get("volume")) > 0 and _num(item.get("spread_bps")) <= 35.0)
+    option_iv = sum(1 for item in option_chain if item.get("implied_volatility") is not None)
+    option_delta = sum(1 for item in option_chain if item.get("delta") is not None)
+    option_gamma = sum(1 for item in option_chain if item.get("gamma") is not None)
+    option_theta = sum(1 for item in option_chain if item.get("theta") is not None)
+    option_vega = sum(1 for item in option_chain if item.get("vega") is not None)
+    option_rho = sum(1 for item in option_chain if item.get("rho") is not None)
     options_available = option_count > 0
     options = {
         "checked": True,
@@ -64,22 +77,22 @@ def final_derivatives_options_gate(
         "status": "AVAILABLE" if options_available else "NOT_AVAILABLE",
         "instruments_checked": option_count,
         "usable_instruments": option_usable,
-        "iv_observations": int(_num(e.get("options_iv_observations", 0))),
-        "delta_observations": int(_num(e.get("options_delta_observations", 0))),
-        "gamma_observations": int(_num(e.get("options_gamma_observations", 0))),
-        "theta_observations": int(_num(e.get("options_theta_observations", 0))),
-        "vega_observations": int(_num(e.get("options_vega_observations", 0))),
-        "rho_observations": int(_num(e.get("options_rho_observations", 0))),
+        "iv_observations": option_iv,
+        "delta_observations": option_delta,
+        "gamma_observations": option_gamma,
+        "theta_observations": option_theta,
+        "vega_observations": option_vega,
+        "rho_observations": option_rho,
+        "expiry_status": e.get("status", "UNKNOWN"),
+        "nearest_expiry": e.get("nearest"),
     }
     if options_available:
         if option_usable <= 0:
             blockers.append("listed options detected but usable options evidence is weak")
-        if options["gamma_observations"] == 0:
-            warnings.append("option gamma data unavailable")
-        if options["theta_observations"] == 0:
-            warnings.append("option theta data unavailable")
-        if options["iv_observations"] == 0:
+        if option_iv == 0:
             warnings.append("option implied-volatility data unavailable")
+        if option_delta == 0 or option_gamma == 0 or option_theta == 0 or option_vega == 0:
+            warnings.append("one or more option Greeks unavailable from exchange")
 
     return {
         "passed": not blockers,
@@ -87,5 +100,5 @@ def final_derivatives_options_gate(
         "options": options,
         "blockers": list(dict.fromkeys(blockers)),
         "warnings": list(dict.fromkeys(warnings)),
-        "policy": "futures checked on every candidate; options checked whenever listed options exist",
+        "policy": "futures checked on every candidate; options chain checked whenever listed options exist",
     }
