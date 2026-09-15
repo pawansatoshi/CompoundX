@@ -43,8 +43,43 @@ class ExchangeGateway:
             data[timeframe] = {"ohlcv": candles, "orderbook": self.order_book(symbol, limit=orderbook_limit), "volume": candles[-1][5] if candles else 0.0, "average_volume": sum(row[5] for row in candles[-20:]) / max(1, len(candles[-20:])) if candles else 0.0}
         return data
 
+    def derivatives_market_data(self, symbol: str) -> dict:
+        """Best-effort futures/perpetual context. Missing exchange methods fail closed."""
+        self.exchange.load_markets()
+        base = symbol.split("/")[0]
+        candidates = [m for m in self.exchange.markets.values() if m.get("base") == base and (m.get("swap") or m.get("future"))]
+        if not candidates:
+            return {"available": False, "reason": "no futures or perpetual market found", "markets": []}
+        preferred = next((m for m in candidates if m.get("quote") == symbol.split("/")[-1]), candidates[0])
+        market_symbol = preferred.get("symbol")
+        out = {"available": False, "symbol": market_symbol, "funding_rate": 0.0, "open_interest": 0.0, "open_interest_change_pct": 0.0, "basis_pct": 0.0, "liquidations_24h": 0.0, "markets": len(candidates)}
+        try:
+            if self.exchange.has.get("fetchFundingRate"):
+                funding = self.exchange.fetch_funding_rate(market_symbol)
+                out["funding_rate"] = funding.get("fundingRate") or 0.0
+                out["available"] = True
+        except Exception:
+            pass
+        try:
+            if self.exchange.has.get("fetchOpenInterest"):
+                oi = self.exchange.fetch_open_interest(market_symbol)
+                out["open_interest"] = oi.get("openInterestValue") or oi.get("openInterestAmount") or 0.0
+                out["available"] = True
+        except Exception:
+            pass
+        try:
+            spot = self.exchange.fetch_ticker(symbol)
+            perp = self.exchange.fetch_ticker(market_symbol)
+            spot_last, perp_last = spot.get("last"), perp.get("last")
+            if spot_last and perp_last:
+                out["basis_pct"] = (float(perp_last) / float(spot_last) - 1.0) * 100.0
+                out["available"] = True
+        except Exception:
+            pass
+        return out
+
     def expiry_market_data(self, symbol: str, *, limit: int = 100) -> dict:
-        """Discover all exchange-listed expiring derivatives/options for the base asset."""
+        """Discover exchange-listed expiring derivatives/options for the base asset."""
         self.exchange.load_markets()
         base = symbol.split("/")[0]
         markets = []
@@ -57,6 +92,8 @@ class ExchangeGateway:
                 item["volume"] = ticker.get("baseVolume") or ticker.get("quoteVolume") or 0.0
                 bid, ask = ticker.get("bid"), ticker.get("ask")
                 item["spread_bps"] = ((ask - bid) / ((ask + bid) / 2.0) * 10000.0) if bid and ask and ask >= bid else 0.0
+                info = ticker.get("info") or {}
+                item["implied_volatility"] = info.get("impliedVolatility") or info.get("markIv")
             except Exception:
                 item["volume"], item["spread_bps"] = 0.0, 0.0
             try:
