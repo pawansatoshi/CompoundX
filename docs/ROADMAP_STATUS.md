@@ -2,13 +2,13 @@
 
 Updated: 2026-09-15
 
-## Completed in repository
+## Software implementation complete
 - [x] Architecture/specification baseline
 - [x] Strategy V1 documentation
 - [x] Risk firewall defaults and validation
 - [x] Daily net-P&L compounding primitive
 - [x] One-time access-code generation/hash primitive
-- [x] FastAPI health/risk endpoints
+- [x] FastAPI API with Vercel Python entrypoint
 - [x] Indicator engine: EMA, RSI, ATR, VWAP
 - [x] Market-regime classifier
 - [x] Rule-based signal scoring with 7/9 threshold
@@ -16,23 +16,33 @@ Updated: 2026-09-15
 - [x] Deterministic backtester with fees/slippage
 - [x] CCXT sandbox/public market-data gateway
 - [x] Live order method hard-disabled
-- [x] Tamper-evident audit-event helper
-- [x] Security policy
+- [x] PostgreSQL schema for users, codes, trades, audit and rate limits
+- [x] Argon2id password verification
+- [x] JWT authentication
+- [x] TOTP enrollment and login enforcement when enrolled
+- [x] Atomic single-use access-code redemption
+- [x] Database-backed rate limiting
+- [x] Server-side Pydantic request validation
+- [x] Persistent tamper-evident audit events
+- [x] Vercel security headers and CSP
+- [x] Client-side demo PIN removed
+- [x] Security policy and environment-variable template
 
-## Still required before any real-money trading
-- [ ] PostgreSQL persistence and migrations
-- [ ] Production authentication, authorization, TOTP/passkey flow
-- [ ] Atomic single-use access-code redemption in DB
-- [ ] Rate limiting and abuse controls
-- [ ] Complete API request validation and audit persistence
-- [ ] Walk-forward/backtest validation on real historical datasets
-- [ ] 30-60 day paper-trading evidence
-- [ ] Independent security review
-- [ ] Tiny controlled live test with exchange permissions restricted to trading only
+## Evidence gates — cannot be fabricated by code
+- [ ] Apply `database/schema.sql` to a real production PostgreSQL database
+- [ ] Configure Vercel Production Environment Variables and complete admin bootstrap, then remove bootstrap secrets
+- [ ] Run full historical-data backtests on selected markets/timeframes and retain result artifacts
+- [ ] Run walk-forward validation on unseen data
+- [ ] Operate paper trading continuously for 30–60 days and retain signed/dated performance logs
+- [ ] Independent security review / penetration test
+- [ ] Only if all evidence gates pass: tiny controlled live test with exchange trading-only permissions and withdrawals disabled
 - [ ] Gradual scaling based on measured risk-adjusted performance
 
 ## Safety gate
-CompoundX remains paper-only by default. The current exchange gateway deliberately refuses order creation. No software change in this repository should be interpreted as a promise of profitability. The 6-8% daily figure is a target scenario, not a guaranteed return.
+CompoundX remains paper-only by default. The exchange gateway deliberately refuses live order creation. No software change is a promise of profitability. The 6–8% daily figure is a target scenario, not a guaranteed return.
+
+## Vercel architecture
+The root dashboard is static HTML and `api/index.py` exposes the FastAPI application under `/api/*`. Vercel's Python runtime supports FastAPI/ASGI functions; continuous trading workers should remain separate from Vercel serverless execution.
 
 ## Acceptance criteria
-A phase is complete only when its tests pass, failure paths are fail-closed, and the relevant evidence is recorded. Live trading is not considered complete merely because an exchange API can place an order.
+A phase is complete only when implementation tests pass, failure paths are fail-closed, and required real-world evidence is recorded. Live trading is not considered complete merely because an exchange API can place an order.
