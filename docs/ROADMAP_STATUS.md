@@ -24,6 +24,11 @@ Updated: 2026-09-15
 - [x] Database-backed rate limiting
 - [x] Server-side Pydantic request validation
 - [x] Persistent tamper-evident audit events
+- [x] Bounded self-learning trade journal and setup fingerprinting
+- [x] Pre-trade historical lesson review with bounded score adjustment
+- [x] Post-trade mistake/solution persistence
+- [x] Learning-review audit records
+- [x] Self-learning API endpoints and tests
 - [x] Vercel security headers and CSP
 - [x] Client-side demo PIN removed
 - [x] Security policy and environment-variable template
@@ -40,6 +45,9 @@ Updated: 2026-09-15
 
 ## Safety gate
 CompoundX remains paper-only by default. The exchange gateway deliberately refuses live order creation. No software change is a promise of profitability. The 6–8% daily figure is a target scenario, not a guaranteed return.
+
+## Self-learning safety model
+Learning is advisory and bounded to +/-2 signal points. It cannot change hard risk limits, disable stop-loss/drawdown protection, enable live execution, or enable withdrawals. Insufficient history produces no adjustment. Persistent PostgreSQL records are the source of truth for lessons and reviews.
 
 ## Vercel architecture
 The root dashboard is static HTML and `api/index.py` exposes the FastAPI application under `/api/*`. Vercel's Python runtime supports FastAPI/ASGI functions; continuous trading workers should remain separate from Vercel serverless execution.
