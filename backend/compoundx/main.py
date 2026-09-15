@@ -10,16 +10,7 @@ from pydantic import BaseModel, EmailStr, Field
 
 from .access_codes import code_hash, expiry, generate_code
 from .audit import audit_event
-from .auth import (
-    decrypt_totp_secret,
-    encrypt_totp_secret,
-    hash_password,
-    issue_token,
-    new_totp_secret,
-    verify_password,
-    verify_totp,
-    decode_token,
-)
+from .auth import decrypt_totp_secret, encrypt_totp_secret, hash_password, issue_token, new_totp_secret, verify_password, verify_totp, decode_token
 from .config import CONFIG
 from .db import connection, is_configured
 
@@ -82,32 +73,17 @@ def rate_limit(key: str, limit: int = 10, window_seconds: int = 60) -> None:
 
 def write_audit(conn, action: str, actor: str, outcome: str, metadata: dict | None = None) -> None:
     event = audit_event(action, actor, outcome, metadata)
-    conn.execute(
-        "INSERT INTO audit_events(event_hash, action, actor, outcome, metadata) VALUES(%s,%s,%s,%s,%s::jsonb)",
-        (event["event_hash"], action, actor, outcome, json.dumps(event["metadata"])),
-    )
+    conn.execute("INSERT INTO audit_events(event_hash, action, actor, outcome, metadata) VALUES(%s,%s,%s,%s,%s::jsonb)", (event["event_hash"], action, actor, outcome, json.dumps(event["metadata"])))
 
 
 @app.get("/api/health")
 def health():
-    return {
-        "status": "ok",
-        "paper_trading": CONFIG.paper_trading,
-        "live_execution_enabled": CONFIG.live_execution_enabled,
-        "withdrawals_enabled": CONFIG.withdrawals_enabled,
-        "database_configured": is_configured(),
-    }
+    return {"status": "ok", "paper_trading": CONFIG.paper_trading, "live_execution_enabled": CONFIG.live_execution_enabled, "withdrawals_enabled": CONFIG.withdrawals_enabled, "database_configured": is_configured()}
 
 
 @app.get("/api/risk/defaults")
 def risk_defaults():
-    return {
-        "risk_per_trade": CONFIG.risk.risk_per_trade,
-        "daily_loss_limit": CONFIG.risk.daily_loss_limit,
-        "max_drawdown": CONFIG.risk.max_drawdown,
-        "max_positions": CONFIG.risk.max_positions,
-        "minimum_signal_score": CONFIG.strategy.minimum_signal_score,
-    }
+    return {"risk_per_trade": CONFIG.risk.risk_per_trade, "daily_loss_limit": CONFIG.risk.daily_loss_limit, "max_drawdown": CONFIG.risk.max_drawdown, "max_positions": CONFIG.risk.max_positions, "minimum_signal_score": CONFIG.strategy.minimum_signal_score}
 
 
 @app.get("/api/mode")
@@ -125,8 +101,7 @@ def bootstrap(request: BootstrapRequest, http_request: Request):
     if not expected or request.bootstrap_secret != expected or not admin_email or len(password) < 12:
         raise HTTPException(status_code=403, detail="Bootstrap denied")
     with connection() as conn:
-        count = conn.execute("SELECT count(*) FROM users").fetchone()[0]
-        if count != 0:
+        if conn.execute("SELECT count(*) FROM users").fetchone()[0] != 0:
             raise HTTPException(status_code=409, detail="Bootstrap already completed")
         user_id = uuid.uuid4()
         conn.execute("INSERT INTO users(id,email,role,password_hash) VALUES(%s,%s,'admin',%s)", (user_id, admin_email, hash_password(password)))
@@ -140,11 +115,10 @@ def login(request: LoginRequest, http_request: Request):
     require_database()
     with connection() as conn:
         row = conn.execute("SELECT id,email,role,password_hash,totp_secret_encrypted,is_active FROM users WHERE lower(email)=lower(%s)", (request.email,)).fetchone()
-        if not row or not row[5] or not verify_password(row[3], request.password):
+        if not row or not row[5] or not verify_password(request.password, row[3]):
             raise HTTPException(status_code=401, detail="Invalid credentials")
-        if row[4] is not None:
-            if not request.totp_code or not verify_totp(decrypt_totp_secret(row[4]), request.totp_code):
-                raise HTTPException(status_code=401, detail="TOTP required or invalid")
+        if row[4] is not None and (not request.totp_code or not verify_totp(decrypt_totp_secret(row[4]), request.totp_code)):
+            raise HTTPException(status_code=401, detail="TOTP required or invalid")
         token = issue_token(str(row[0]), row[2], row[1])
         write_audit(conn, "login", row[1], "success")
     return {"access_token": token, "token_type": "bearer", "role": row[2]}
@@ -154,9 +128,8 @@ def login(request: LoginRequest, http_request: Request):
 def redeem(request: RedeemRequest, http_request: Request):
     rate_limit(f"redeem:{http_request.client.host if http_request.client else 'unknown'}", 6, 300)
     require_database()
-    normalized_hash = code_hash(request.code)
     with connection() as conn:
-        row = conn.execute("SELECT id,expires_at,redeemed_at,revoked_at FROM access_codes WHERE code_hash=%s FOR UPDATE", (normalized_hash,)).fetchone()
+        row = conn.execute("SELECT id,expires_at,redeemed_at,revoked_at FROM access_codes WHERE code_hash=%s FOR UPDATE", (code_hash(request.code),)).fetchone()
         now = datetime.now(timezone.utc)
         if not row or row[2] is not None or row[3] is not None or row[1] <= now:
             raise HTTPException(status_code=400, detail="Invalid, expired, revoked or already-used code")
