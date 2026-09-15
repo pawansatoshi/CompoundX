@@ -6,6 +6,7 @@ BACKEND = Path(__file__).resolve().parents[2] / "backend"
 if str(BACKEND) not in sys.path: sys.path.insert(0, str(BACKEND))
 from compoundx.autonomous_intelligence import build_autonomous_intelligence
 from compoundx.db import connection, is_configured
+from compoundx.derivatives_gate import final_derivatives_options_gate
 from compoundx.economic_calendar import committee_calendar_gate, fetch_calendar
 from compoundx.exchange import ExchangeGateway
 from compoundx.expiry import analyze_expiries
@@ -63,7 +64,7 @@ def _apply_research(result, ledger):
     return result
 
 
-def _apply_autonomy(result, symbol, market_data, derivatives, expiry):
+def _apply_autonomy(result, symbol, market_data, derivatives, expiry, expiry_market_data):
     autonomy = build_autonomous_intelligence(
         symbol=symbol,
         market_data=market_data,
@@ -81,7 +82,13 @@ def _apply_autonomy(result, symbol, market_data, derivatives, expiry):
         result.setdefault("reasons", []).extend(autonomy.get("failures", []))
     ledger = _trade_ledger(symbol)
     result["paper_trade_ledger"] = ledger
-    return _apply_research(result, ledger)
+    result = _apply_research(result, ledger)
+    final_gate = final_derivatives_options_gate(derivatives, expiry, expiry_market_data)
+    result["derivatives_options_gate"] = final_gate
+    if result.get("decision") == "TRADE" and not final_gate.get("passed", False):
+        result["decision"] = "NO_TRADE"
+        result.setdefault("reasons", []).extend(final_gate.get("blockers", []))
+    return result
 
 
 def _scan(symbol, exchange_id, sandbox, equity, limit):
@@ -98,7 +105,7 @@ def _scan(symbol, exchange_id, sandbox, equity, limit):
         "supported_timeframes": gateway.supported_timeframes(),
         "live_execution": False,
     })
-    return _apply_autonomy(_apply_macro_gate(result, symbol), symbol, market_data, derivatives, expiry)
+    return _apply_autonomy(_apply_macro_gate(result, symbol), symbol, market_data, derivatives, expiry, expiry_data)
 
 
 class handler(BaseHTTPRequestHandler):
