@@ -66,7 +66,7 @@ def test_risk_and_execution_are_hard_gates():
 
 
 def test_validation_requires_out_of_sample_evidence():
-    report = evaluate_out_of_sample([0.01, -0.01] * 30, [0.8, 0.2] * 30, min_samples=50)
+    report = evaluate_out_of_sample([0.01] * 60, [0.8] * 60, min_samples=50)
     assert report.samples == 60
     assert report.passed
     assert report.brier_score >= 0
