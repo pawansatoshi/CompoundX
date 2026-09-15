@@ -8,14 +8,26 @@ class RiskConfig:
     max_drawdown: float = 0.10
     max_positions: int = 3
     max_leverage: float = 1.0
+    max_portfolio_heat: float = 0.03
+    max_position_correlation: float = 0.85
 
 
 @dataclass(frozen=True)
 class StrategyConfig:
     minimum_signal_score: int = 7
-    target_low: float = 0.06
-    target_high: float = 0.08
-    force_daily_target: bool = False
+    minimum_calibrated_probability: float = 0.60
+    minimum_probability_lower_bound: float = 0.55
+    minimum_evidence_coverage: float = 0.70
+
+
+@dataclass(frozen=True)
+class ValidationConfig:
+    minimum_research_samples: int = 30
+    minimum_paper_samples: int = 100
+    minimum_regime_count: int = 3
+    minimum_oos_positive_split_rate: float = 0.60
+    maximum_ece: float = 0.10
+    require_stress_pass: bool = True
 
 
 @dataclass(frozen=True)
@@ -25,6 +37,7 @@ class AppConfig:
     withdrawals_enabled: bool = False
     risk: RiskConfig = RiskConfig()
     strategy: StrategyConfig = StrategyConfig()
+    validation: ValidationConfig = ValidationConfig()
 
 
 CONFIG = AppConfig()
