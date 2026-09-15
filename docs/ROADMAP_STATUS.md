@@ -29,6 +29,15 @@ Updated: 2026-09-15
 - [x] Post-trade mistake/solution persistence
 - [x] Learning-review audit records
 - [x] Self-learning API endpoints and tests
+- [x] Multi-model deterministic AI trade committee
+- [x] Adversarial thesis/failure-case gate
+- [x] Historical-edge and minimum-sample gate
+- [x] Liquidity, spread and expected-slippage gates
+- [x] Risk and execution hard gates
+- [x] Committee decision persistence for audit
+- [x] Out-of-sample validation metrics: expectancy, profit factor, drawdown, Sharpe, Brier and calibration error
+- [x] Walk-forward split generator
+- [x] AI committee and validation unit tests
 - [x] Vercel security headers and CSP
 - [x] Client-side demo PIN removed
 - [x] Security policy and environment-variable template
@@ -44,7 +53,10 @@ Updated: 2026-09-15
 - [ ] Gradual scaling based on measured risk-adjusted performance
 
 ## Safety gate
-CompoundX remains paper-only by default. The exchange gateway deliberately refuses live order creation. No software change is a promise of profitability. The 6–8% daily figure is a target scenario, not a guaranteed return.
+CompoundX remains paper-only by default. The exchange gateway deliberately refuses live order creation. No software change is a promise of profitability. The 6–8% daily figure is a target scenario, not a guaranteed return. The committee's `TRADE` decision means the candidate passed the configured evidence filters; it does not mean a profitable outcome is guaranteed.
+
+## AI committee safety model
+The committee is fail-closed. Unknown regime, insufficient comparable history, material model disagreement, poor risk/reward, excessive spread/slippage, failed risk/execution checks, or an adversarial failure case results in `NO_TRADE`. The committee cannot change hard risk limits, enable live execution, or enable withdrawals. Its decisions and model votes are persisted for audit when PostgreSQL is configured.
 
 ## Self-learning safety model
 Learning is advisory and bounded to +/-2 signal points. It cannot change hard risk limits, disable stop-loss/drawdown protection, enable live execution, or enable withdrawals. Insufficient history produces no adjustment. Persistent PostgreSQL records are the source of truth for lessons and reviews.
