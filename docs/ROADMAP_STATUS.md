@@ -32,15 +32,26 @@ Updated: 2026-09-15
 - [x] Multi-model deterministic AI trade committee
 - [x] Adversarial thesis/failure-case gate
 - [x] Historical-edge and minimum-sample gate
+- [x] Side-aware order-book liquidity analysis
+- [x] Multi-timeframe liquidity analysis across 1m, 3m, 5m, 15m, 30m, 1h, 2h, 4h, 6h, 8h, 12h, 1d, 3d and 1w where the exchange supports them
+- [x] Bid/ask depth, spread, volume, depth-multiple and market-impact checks
+- [x] Independent LONG and SHORT liquidity evaluation
+- [x] Broad multi-timeframe liquidity confirmation gate
+- [x] Liquidity-aware exchange market-data collection
+- [x] Authenticated multi-timeframe liquidity API
 - [x] Liquidity, spread and expected-slippage gates
 - [x] Risk and execution hard gates
 - [x] Committee decision persistence for audit
 - [x] Out-of-sample validation metrics: expectancy, profit factor, drawdown, Sharpe, Brier and calibration error
 - [x] Walk-forward split generator
 - [x] AI committee and validation unit tests
+- [x] Liquidity unit tests
 - [x] Vercel security headers and CSP
 - [x] Client-side demo PIN removed
 - [x] Security policy and environment-variable template
+
+## Liquidity decision model
+For each candidate side, CompoundX can collect the exchange order book and OHLCV for every supported timeframe. LONG evaluates executable ask-side depth; SHORT evaluates executable bid-side depth. The engine also measures bid/ask spread, visible depth relative to intended order notional, estimated market impact, volume relative to recent average, and order-book imbalance. Missing or insufficient timeframe data fails closed rather than being interpreted as confirmation.
 
 ## Evidence gates — cannot be fabricated by code
 - [ ] Apply `database/schema.sql` to a real production PostgreSQL database
@@ -56,7 +67,7 @@ Updated: 2026-09-15
 CompoundX remains paper-only by default. The exchange gateway deliberately refuses live order creation. No software change is a promise of profitability. The 6–8% daily figure is a target scenario, not a guaranteed return. The committee's `TRADE` decision means the candidate passed the configured evidence filters; it does not mean a profitable outcome is guaranteed.
 
 ## AI committee safety model
-The committee is fail-closed. Unknown regime, insufficient comparable history, material model disagreement, poor risk/reward, excessive spread/slippage, failed risk/execution checks, or an adversarial failure case results in `NO_TRADE`. The committee cannot change hard risk limits, enable live execution, or enable withdrawals. Its decisions and model votes are persisted for audit when PostgreSQL is configured.
+The committee is fail-closed. Unknown regime, insufficient comparable history, material model disagreement, poor risk/reward, excessive spread/slippage, failed risk/execution checks, insufficient multi-timeframe liquidity, or an adversarial failure case results in `NO_TRADE`. The committee cannot change hard risk limits, enable live execution, or enable withdrawals. Its decisions and model votes are persisted for audit when PostgreSQL is configured.
 
 ## Self-learning safety model
 Learning is advisory and bounded to +/-2 signal points. It cannot change hard risk limits, disable stop-loss/drawdown protection, enable live execution, or enable withdrawals. Insufficient history produces no adjustment. Persistent PostgreSQL records are the source of truth for lessons and reviews.
