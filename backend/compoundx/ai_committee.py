@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from math import isfinite
 from typing import Any
 
+from .economic_calendar import committee_calendar_gate
 from .expiry import analyze_expiries
 from .liquidity import analyze_multi_timeframe_liquidity
 
@@ -16,7 +17,7 @@ MAX_DISAGREEMENT = 0.25
 MIN_RR = 1.5
 MAX_SPREAD_BPS = 35.0
 MAX_SLIPPAGE_BPS = 20.0
-MODELS = ("regime", "trend", "momentum", "volatility", "liquidity", "structure", "history", "news", "expiry")
+MODELS = ("regime", "trend", "momentum", "volatility", "liquidity", "structure", "history", "news", "expiry", "economic_calendar")
 
 
 @dataclass(frozen=True)
@@ -87,14 +88,18 @@ def evaluate_committee(context: dict[str, Any]) -> CommitteeDecision:
         expiry = analyze_expiries(context.get("expiry_instruments"), market_type=str(context.get("market_type", "derivative")))
     if not isinstance(expiry, dict):
         market_type = str(context.get("market_type", "")).lower()
-        # Expiry is a hard gate only when the caller explicitly identifies an
-        # expiring/derivative market or requests expiry evidence.
         if market_type in {"spot", "cash"} or not bool(context.get("expiry_required", False)):
             expiry = analyze_expiries(None, market_type="spot")
         else:
             expiry = {"status": "UNKNOWN", "usable": False, "score": 0.0, "reason": "expiry evidence unavailable"}
     if not bool(expiry.get("usable", False)) and expiry.get("status") != "NOT_APPLICABLE":
         reasons.append(str(expiry.get("reason", "expiry analysis rejected")))
+
+    economic = context.get("economic_calendar")
+    if isinstance(economic, dict):
+        macro_pass, macro_reasons = committee_calendar_gate(economic)
+        if not macro_pass:
+            reasons.extend(macro_reasons)
 
     votes = [
         _vote("regime", context.get("regime_score", 0), f"regime={regime}"),
@@ -110,11 +115,14 @@ def evaluate_committee(context: dict[str, Any]) -> CommitteeDecision:
     votes.append(_vote("news", context.get("news_score", 0), "news/sentiment filter"))
     expiry_score = _clamp(expiry.get("score", 0.0)) if expiry.get("status") != "NOT_APPLICABLE" else 1.0
     votes.append(_vote("expiry", expiry_score, str(expiry.get("reason", "expiry not applicable"))))
+    if isinstance(economic, dict):
+        macro_score = 0.0 if not economic.get("usable", False) else max(0.0, 1.0 - float(economic.get("risk_score", 0.0)))
+        votes.append(_vote("economic_calendar", macro_score, str(economic.get("reason", "macro calendar reviewed"))))
 
     active = [v for v in votes if v.direction != 0]
     if not active or direction == 0:
         reasons.append("no directional consensus")
-        return CommitteeDecision("NO_TRADE", direction, 0.0, 0.0, history_edge, tuple(reasons), tuple(votes), liquidity, expiry)
+        return CommitteeDecision("NO_TRADE", direction, 0.0, 0.0, history_edge, tuple(dict.fromkeys(reasons)), tuple(votes), liquidity, expiry)
     aligned = [v for v in active if v.direction == direction]
     agreement = len(aligned) / len(active)
     weighted = sum(v.direction * v.strength for v in active) / len(active)
@@ -133,7 +141,7 @@ def evaluate_committee(context: dict[str, Any]) -> CommitteeDecision:
     if _clamp(context.get("adversarial_score", 0)) < 0.0: reasons.append("adversarial review found a strong failure case")
     if not bool(context.get("execution_ok", False)): reasons.append("execution-quality gate failed")
     decision = "TRADE" if not reasons else "NO_TRADE"
-    return CommitteeDecision(decision, direction, round(score, 6), round(agreement, 6), round(history_edge, 6), tuple(reasons), tuple(votes), liquidity, expiry)
+    return CommitteeDecision(decision, direction, round(score, 6), round(agreement, 6), round(history_edge, 6), tuple(dict.fromkeys(reasons)), tuple(votes), liquidity, expiry)
 
 
 def decision_dict(result: CommitteeDecision) -> dict[str, Any]:
