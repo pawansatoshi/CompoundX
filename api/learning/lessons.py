@@ -1,6 +1,7 @@
 import json
 import sys
 import uuid
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
 BACKEND = Path(__file__).resolve().parents[2] / "backend"
