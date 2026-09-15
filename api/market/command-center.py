@@ -50,7 +50,7 @@ def _apply_research(result, ledger):
         "open_interest", "expiry_distance", "macro_risk", "news_score", "regime",
     ]
     research = build_research_intelligence(
-        market_data=result.get("market_data", {}),
+        market_data={},
         market_summary=result,
         trades=ledger.get("trades", []),
         feature_names=feature_names,
@@ -97,7 +97,6 @@ def _scan(symbol, exchange_id, sandbox, equity, limit):
         "data_source": "exchange_public_market_data",
         "supported_timeframes": gateway.supported_timeframes(),
         "live_execution": False,
-        "market_data": market_data,
     })
     return _apply_autonomy(_apply_macro_gate(result, symbol), symbol, market_data, derivatives, expiry)
 
