@@ -1,104 +1,43 @@
 from __future__ import annotations
 
-"""Final cross-market gate for futures and options evidence.
+"""Advisory cross-market confirmation for futures, options and expiry.
 
-This is deliberately a confirmation/risk gate, not a standalone trading signal.
-It runs immediately before CompoundX finalizes a candidate trade.
+Availability never blocks a trade. Contradictory derivatives evidence is surfaced
+and can influence the quality-weighted committee, while hard risk/execution gates
+remain authoritative.
 """
-
 from typing import Any
 
-
-def _num(value: Any, default: float = 0.0) -> float:
+def _num(value:Any,default=0.):
     try:
-        value = float(value)
-        return value if value == value and abs(value) != float("inf") else default
-    except (TypeError, ValueError):
-        return default
+        v=float(value); return v if v==v and abs(v)!=float('inf') else default
+    except (TypeError,ValueError): return default
+
+def derivatives_options_advisory(derivatives:dict[str,Any]|None,expiry:dict[str,Any]|None,expiry_market_data:dict[str,Any]|None=None,direction:int=0)->dict[str,Any]:
+    d=derivatives if isinstance(derivatives,dict) else {}; e=expiry if isinstance(expiry,dict) else {}; raw=expiry_market_data if isinstance(expiry_market_data,dict) else {}
+    warnings=[]; conflicts=[]; bias=0.
+    available=bool(d.get('available',False))
+    if available:
+        funding=_num(d.get('funding_rate')); oi=_num(d.get('open_interest_change_pct',d.get('oi_change_pct'))); basis=_num(d.get('basis_pct'))
+        # Extreme positive funding + rising OI is a contrarian warning to LONG; vice versa SHORT.
+        if funding>.001 and oi>0: bias -= .35; warnings.append('futures long crowding elevated')
+        if funding<-.001 and oi>0: bias += .35; warnings.append('futures short crowding elevated')
+        if abs(basis)>1: warnings.append('futures basis unusually wide')
+    else: warnings.append('futures evidence unavailable; neutral contribution')
+    chain=raw.get('instruments') if isinstance(raw.get('instruments'),list) else []
+    options=[x for x in chain if isinstance(x,dict) and (x.get('option') or x.get('optionType') or x.get('option_type'))]
+    if options:
+        calls=sum(_num(x.get('open_interest')) for x in options if str(x.get('optionType',x.get('option_type',''))).lower()=='call')
+        puts=sum(_num(x.get('open_interest')) for x in options if str(x.get('optionType',x.get('option_type',''))).lower()=='put')
+        pcr=puts/max(calls,1e-12)
+        if direction>0 and pcr<.5: bias-=.20; conflicts.append('options put/call OI is weak for LONG confirmation')
+        if direction<0 and pcr>2: bias+=.20; conflicts.append('options put/call OI is weak for SHORT confirmation')
+        if e.get('status')=='AVAILABLE' and _num(e.get('days_to_expiry'))<=1: warnings.append('near-expiry positioning may increase volatility')
+    else: warnings.append('listed options unavailable; neutral contribution')
+    return {'available':available or bool(options),'bias':round(max(-1,min(1,bias)),4),'warnings':list(dict.fromkeys(warnings)),'conflicts':list(dict.fromkeys(conflicts)),'futures_checked':True,'options_checked':True,'hard_block':False,'policy':'ADVISORY_ONLY'}
 
 
-def final_derivatives_options_gate(
-    derivatives: dict[str, Any] | None,
-    expiry: dict[str, Any] | None,
-    expiry_market_data: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Check current futures/perpetual and listed-options evidence before a trade.
-
-    Futures evidence is checked for every candidate. Listed options are checked
-    from the raw exchange chain whenever the exchange exposes option contracts.
-    Missing options are explicitly NOT_AVAILABLE, never a fake positive signal.
-    """
-    d = derivatives if isinstance(derivatives, dict) else {}
-    e = expiry if isinstance(expiry, dict) else {}
-    raw = expiry_market_data if isinstance(expiry_market_data, dict) else {}
-    blockers: list[str] = []
-    warnings: list[str] = []
-
-    futures_available = bool(d.get("available", False))
-    futures = {
-        "checked": True,
-        "available": futures_available,
-        "funding_rate": _num(d.get("funding_rate")),
-        "open_interest": _num(d.get("open_interest")),
-        "open_interest_change_pct": _num(d.get("open_interest_change_pct", d.get("oi_change_pct"))),
-        "basis_pct": _num(d.get("basis_pct")),
-        "liquidations_24h": _num(d.get("liquidations_24h")),
-    }
-    if not futures_available:
-        blockers.append("futures/perpetual evidence unavailable")
-    else:
-        funding = futures["funding_rate"]
-        oi_change = futures["open_interest_change_pct"]
-        basis = futures["basis_pct"]
-        if funding > 0.001 and oi_change > 0:
-            warnings.append("futures long crowding elevated")
-        if funding < -0.001 and oi_change > 0:
-            warnings.append("futures short crowding elevated")
-        if abs(basis) > 1.0:
-            warnings.append("futures basis is unusually wide")
-
-    raw_instruments = raw.get("instruments") if isinstance(raw.get("instruments"), list) else []
-    option_chain = [
-        item for item in raw_instruments
-        if isinstance(item, dict) and (item.get("option") or item.get("optionType") or item.get("option_type"))
-    ]
-    option_count = len(option_chain)
-    option_usable = sum(1 for item in option_chain if _num(item.get("open_interest")) > 0 and _num(item.get("volume")) > 0 and _num(item.get("spread_bps")) <= 35.0)
-    option_iv = sum(1 for item in option_chain if item.get("implied_volatility") is not None)
-    option_delta = sum(1 for item in option_chain if item.get("delta") is not None)
-    option_gamma = sum(1 for item in option_chain if item.get("gamma") is not None)
-    option_theta = sum(1 for item in option_chain if item.get("theta") is not None)
-    option_vega = sum(1 for item in option_chain if item.get("vega") is not None)
-    option_rho = sum(1 for item in option_chain if item.get("rho") is not None)
-    options_available = option_count > 0
-    options = {
-        "checked": True,
-        "available": options_available,
-        "status": "AVAILABLE" if options_available else "NOT_AVAILABLE",
-        "instruments_checked": option_count,
-        "usable_instruments": option_usable,
-        "iv_observations": option_iv,
-        "delta_observations": option_delta,
-        "gamma_observations": option_gamma,
-        "theta_observations": option_theta,
-        "vega_observations": option_vega,
-        "rho_observations": option_rho,
-        "expiry_status": e.get("status", "UNKNOWN"),
-        "nearest_expiry": e.get("nearest"),
-    }
-    if options_available:
-        if option_usable <= 0:
-            blockers.append("listed options detected but usable options evidence is weak")
-        if option_iv == 0:
-            warnings.append("option implied-volatility data unavailable")
-        if option_delta == 0 or option_gamma == 0 or option_theta == 0 or option_vega == 0:
-            warnings.append("one or more option Greeks unavailable from exchange")
-
-    return {
-        "passed": not blockers,
-        "futures": futures,
-        "options": options,
-        "blockers": list(dict.fromkeys(blockers)),
-        "warnings": list(dict.fromkeys(warnings)),
-        "policy": "futures checked on every candidate; options chain checked whenever listed options exist",
-    }
+def final_derivatives_options_gate(derivatives,expiry,expiry_market_data=None):
+    """Backward-compatible wrapper: always passes; exposes advisory evidence."""
+    a=derivatives_options_advisory(derivatives,expiry,expiry_market_data)
+    return {'passed':True,'futures':{'checked':True,'available':bool((derivatives or {}).get('available',False))},'options':{'checked':True,'available':a['available']},'blockers':[],'warnings':a['warnings']+a['conflicts'],'advisory':a,'policy':'ADVISORY_ONLY; unavailable or weak futures/options evidence never blocks a candidate'}
