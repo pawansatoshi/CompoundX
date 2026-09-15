@@ -2,14 +2,17 @@ from __future__ import annotations
 
 """Deterministic, fail-closed AI-style trade committee.
 
-This is intentionally model-agnostic: production ML/LLM models can feed the
-normalized votes, but the final gate is deterministic and auditable. No gate
-in this module can enable live execution or weaken hard risk limits.
+The committee evaluates LONG and SHORT candidates independently. Liquidity is
+not a single score: it can be supplied as a multi-timeframe order-book/volume
+matrix and must pass as a broad execution-quality confirmation. No gate here
+can enable live execution or weaken hard risk limits.
 """
 
 from dataclasses import dataclass
 from math import isfinite
 from typing import Any
+
+from .liquidity import analyze_multi_timeframe_liquidity
 
 MIN_HISTORY = 20
 MIN_EDGE = 0.68
@@ -20,14 +23,7 @@ MAX_SPREAD_BPS = 35.0
 MAX_SLIPPAGE_BPS = 20.0
 
 MODELS = (
-    "regime",
-    "trend",
-    "momentum",
-    "volatility",
-    "liquidity",
-    "structure",
-    "history",
-    "news",
+    "regime", "trend", "momentum", "volatility", "liquidity", "structure", "history", "news"
 )
 
 
@@ -48,6 +44,7 @@ class CommitteeDecision:
     edge: float
     reasons: tuple[str, ...]
     votes: tuple[Vote, ...]
+    liquidity: dict[str, Any] | None = None
 
 
 def _clamp(value: Any, lo: float = -1.0, hi: float = 1.0) -> float:
@@ -73,30 +70,48 @@ def _history_edge(context: dict[str, Any]) -> tuple[float, int, str]:
         return 0.0, 0, f"insufficient comparable history ({n}/{MIN_HISTORY})"
     if not 0.0 <= win_rate <= 1.0:
         return 0.0, 0, "invalid historical win rate"
-    # A win rate alone is not enough; require positive net expectancy as well.
     edge = max(0.0, min(1.0, 0.5 * win_rate + 0.5 * (1.0 if expectancy > 0 else 0.0)))
-    direction = 1 if context.get("history_direction", context.get("direction", 0)) > 0 else -1 if context.get("history_direction", context.get("direction", 0)) < 0 else 0
+    raw_direction = context.get("history_direction", context.get("direction", 0))
+    direction = 1 if raw_direction > 0 else -1 if raw_direction < 0 else 0
     return edge, direction, f"history n={n}, win_rate={win_rate:.2%}, expectancy={expectancy:.4g}"
 
 
+def _legacy_liquidity(context: dict[str, Any], direction: int, reasons: list[str]) -> tuple[float, dict[str, Any] | None]:
+    """Use the old scalar only for backward compatibility; live matrix data is preferred."""
+    matrix = context.get("liquidity_matrix")
+    if isinstance(matrix, dict):
+        result = matrix
+        if not bool(result.get("usable", False)):
+            reasons.append(str(result.get("reason", "multi-timeframe liquidity rejected")))
+        return _clamp(float(result.get("score", 0.0))), result
+
+    # A scalar liquidity_score is acceptable for existing unit/API callers, but
+    # a real market-data pipeline should provide liquidity_matrix.
+    if "liquidity_score" not in context:
+        reasons.append("missing multi-timeframe liquidity evidence")
+        return 0.0, None
+    return _clamp(context.get("liquidity_score", 0.0)), None
+
+
 def evaluate_committee(context: dict[str, Any]) -> CommitteeDecision:
-    """Evaluate a candidate and return TRADE only when every critical gate passes."""
+    """Return TRADE only when every critical gate, including liquidity, passes."""
     direction = 1 if context.get("direction", 0) > 0 else -1 if context.get("direction", 0) < 0 else 0
     reasons: list[str] = []
-
     regime = str(context.get("regime", "UNKNOWN")).upper()
     if regime == "UNKNOWN":
         reasons.append("unknown regime")
     if context.get("news_risk", False):
         reasons.append("news/event risk")
 
-    votes: list[Vote] = []
-    votes.append(_vote("regime", context.get("regime_score", 0), f"regime={regime}"))
-    votes.append(_vote("trend", context.get("trend_score", 0), "trend confirmation"))
-    votes.append(_vote("momentum", context.get("momentum_score", 0), "momentum confirmation"))
-    votes.append(_vote("volatility", context.get("volatility_score", 0), "volatility quality"))
-    votes.append(_vote("liquidity", context.get("liquidity_score", 0), "liquidity quality"))
-    votes.append(_vote("structure", context.get("structure_score", 0), "market structure"))
+    liquidity_score, liquidity = _legacy_liquidity(context, direction, reasons)
+    votes = [
+        _vote("regime", context.get("regime_score", 0), f"regime={regime}"),
+        _vote("trend", context.get("trend_score", 0), "trend confirmation"),
+        _vote("momentum", context.get("momentum_score", 0), "momentum confirmation"),
+        _vote("volatility", context.get("volatility_score", 0), "volatility quality"),
+        _vote("liquidity", liquidity_score, "multi-timeframe liquidity quality"),
+        _vote("structure", context.get("structure_score", 0), "market structure"),
+    ]
 
     history_edge, history_direction, history_reason = _history_edge(context)
     votes.append(_vote("history", history_edge if history_direction == direction else -history_edge, history_reason))
@@ -105,7 +120,7 @@ def evaluate_committee(context: dict[str, Any]) -> CommitteeDecision:
     active = [v for v in votes if v.direction != 0]
     if not active or direction == 0:
         reasons.append("no directional consensus")
-        return CommitteeDecision("NO_TRADE", direction, 0.0, 0.0, history_edge, tuple(reasons), tuple(votes))
+        return CommitteeDecision("NO_TRADE", direction, 0.0, 0.0, history_edge, tuple(reasons), tuple(votes), liquidity)
 
     aligned = [v for v in active if v.direction == direction]
     agreement = len(aligned) / len(active)
@@ -120,6 +135,8 @@ def evaluate_committee(context: dict[str, Any]) -> CommitteeDecision:
         reasons.append(f"model agreement {agreement:.1%} below {MIN_AGREEMENT:.0%}")
     if (1.0 - agreement) > MAX_DISAGREEMENT:
         reasons.append("material model disagreement")
+    if liquidity_score <= 0.0:
+        reasons.append("liquidity evidence unavailable or failed")
 
     rr = float(context.get("risk_reward", 0) or 0)
     if rr < MIN_RR:
@@ -133,7 +150,6 @@ def evaluate_committee(context: dict[str, Any]) -> CommitteeDecision:
     if not bool(context.get("risk_ok", False)):
         reasons.append("risk firewall rejected candidate")
 
-    # Adversarial reviewer: candidate must survive an independent bear/bull challenge.
     adversarial = _clamp(context.get("adversarial_score", 0))
     if adversarial < 0.0:
         reasons.append("adversarial review found a strong failure case")
@@ -141,13 +157,14 @@ def evaluate_committee(context: dict[str, Any]) -> CommitteeDecision:
         reasons.append("execution-quality gate failed")
 
     decision = "TRADE" if not reasons else "NO_TRADE"
-    return CommitteeDecision(decision, direction, round(score, 6), round(agreement, 6), round(history_edge, 6), tuple(reasons), tuple(votes))
+    return CommitteeDecision(decision, direction, round(score, 6), round(agreement, 6), round(history_edge, 6), tuple(reasons), tuple(votes), liquidity)
 
 
 def decision_dict(result: CommitteeDecision) -> dict[str, Any]:
     return {
         "decision": result.decision,
         "direction": result.direction,
+        "direction_label": "LONG" if result.direction > 0 else "SHORT" if result.direction < 0 else "NONE",
         "score": result.score,
         "agreement": result.agreement,
         "historical_edge": result.edge,
@@ -156,5 +173,6 @@ def decision_dict(result: CommitteeDecision) -> dict[str, Any]:
             {"model": v.model, "direction": v.direction, "strength": round(v.strength, 6), "reason": v.reason}
             for v in result.votes
         ],
+        "liquidity": result.liquidity,
         "live_execution": False,
     }
