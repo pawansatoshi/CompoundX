@@ -7,6 +7,7 @@ BACKEND = Path(__file__).resolve().parents[2] / "backend"
 if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
+from compoundx.autonomous_intelligence import build_autonomous_intelligence
 from compoundx.economic_calendar import committee_calendar_gate, fetch_calendar
 from compoundx.exchange import ExchangeGateway
 from compoundx.expiry import analyze_expiries
@@ -29,6 +30,27 @@ def _apply_macro_gate(result: dict, symbol: str) -> dict:
     return result
 
 
+def _apply_autonomy(result: dict, symbol: str, market_data: dict, derivatives: dict, expiry: dict) -> dict:
+    """Attach the full autonomous evidence pipeline without enabling live execution."""
+    macro_blocked = result.get("economic_calendar_gate") == "BLOCKED"
+    autonomy = build_autonomous_intelligence(
+        symbol=symbol,
+        market_data=market_data,
+        market_summary=result,
+        derivatives=derivatives,
+        expiry=expiry,
+        macro_blocked=macro_blocked,
+    )
+    result["autonomous_intelligence"] = autonomy
+    result["autonomous_decision"] = autonomy.get("decision", "NO_TRADE")
+    result["live_execution"] = False
+    result["paper_trading"] = True
+    if autonomy.get("decision") != "TRADE":
+        result["decision"] = "NO_TRADE"
+        result.setdefault("reasons", []).extend(autonomy.get("failures", []))
+    return result
+
+
 def _scan(symbol: str, exchange_id: str, sandbox: bool, equity: float, limit: int) -> dict:
     gateway = ExchangeGateway(exchange_id=exchange_id, sandbox=sandbox)
     market_data = gateway.multi_timeframe_market_data(symbol, limit=limit, orderbook_limit=100)
@@ -41,7 +63,8 @@ def _scan(symbol: str, exchange_id: str, sandbox: bool, equity: float, limit: in
     result["data_source"] = "exchange_public_market_data"
     result["supported_timeframes"] = gateway.supported_timeframes()
     result["live_execution"] = False
-    return _apply_macro_gate(result, symbol)
+    result = _apply_macro_gate(result, symbol)
+    return _apply_autonomy(result, symbol, market_data, derivatives, expiry)
 
 
 class handler(BaseHTTPRequestHandler):
