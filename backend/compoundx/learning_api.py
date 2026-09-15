@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel, Field
 
+from .auth import decode_token
 from .config import CONFIG
 from .db import connection, is_configured
 from .learning import pre_trade_check, record_trade_lesson, fingerprint, review_similar_lessons
-from .main import bearer_token
 
 router = APIRouter(prefix="/api/learning", tags=["learning"])
 
@@ -25,7 +25,12 @@ class LessonRequest(BaseModel):
 
 
 def user_token(authorization: str | None = Header(default=None)) -> dict:
-    return bearer_token(authorization)
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+    try:
+        return decode_token(authorization[7:].strip())
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
 
 
 @router.get("/status")
