@@ -10,19 +10,17 @@ if str(BACKEND) not in sys.path:
 from compoundx.config import CONFIG
 from compoundx.db import connection, is_configured
 from compoundx.learning import fingerprint, pre_trade_check
-from compoundx.main import bearer_token
-from compoundx.vercel_http import send_json
+from compoundx.vercel_http import bearer_claims, read_json, send_json
 
 
 class handler(BaseHTTPRequestHandler):
     def do_POST(self):
-        if not is_configured():
-            send_json(self, {"detail": "Database is not configured"}, 503)
-            return
         try:
-            claims = bearer_token(self.headers.get("Authorization"))
-            length = int(self.headers.get("Content-Length", "0"))
-            body = json.loads(self.rfile.read(length) or b"{}")
+            if not is_configured():
+                send_json(self, {"detail": "Database is not configured"}, 503)
+                return
+            bearer_claims(self)
+            body = read_json(self)
             context = body.get("context") or {}
             base_score = int(body.get("base_score", 0))
             if not 0 <= base_score <= 9:
@@ -34,7 +32,9 @@ class handler(BaseHTTPRequestHandler):
                     (fingerprint(context), result["base_score"], result["adjusted_score"], result["learning"]["adjustment"], result["blocked"], result["learning"]["similar_trades"], result["reason"]),
                 )
             send_json(self, result)
-        except PermissionError:
-            send_json(self, {"detail": "Authentication required"}, 401)
-        except Exception as exc:
+        except PermissionError as exc:
+            send_json(self, {"detail": str(exc)}, 401)
+        except ValueError as exc:
             send_json(self, {"detail": str(exc)}, 400)
+        except Exception as exc:
+            send_json(self, {"detail": str(exc)}, 500)
