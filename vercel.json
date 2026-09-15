@@ -1,11 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "cleanUrls": true,
-  "functions": {
-    "api/**/*.py": {
-      "excludeFiles": "{tests/**,**/*.test.py,backend/tests/**,fixtures/**,sample-data/**}"
-    }
-  },
   "headers": [
     {
       "source": "/(.*)",
