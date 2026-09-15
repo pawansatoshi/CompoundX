@@ -1,0 +1,7 @@
+# Keep Vercel Hobby deployments under the 12-function limit.
+# These standalone wrappers duplicate functionality already exposed by
+# /api/market/command-center and are not required by the current UI.
+api/ai/committee.py
+api/market/economic-calendar.py
+api/market/expiry.py
+api/market/liquidity.py
