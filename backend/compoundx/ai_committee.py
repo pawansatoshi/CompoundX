@@ -41,12 +41,9 @@ class CommitteeDecision:
 
 
 def _clamp(value: Any, lo: float = -1.0, hi: float = 1.0) -> float:
-    try:
-        value = float(value)
-    except (TypeError, ValueError):
-        return 0.0
-    if not isfinite(value):
-        return 0.0
+    try: value = float(value)
+    except (TypeError, ValueError): return 0.0
+    if not isfinite(value): return 0.0
     return max(lo, min(hi, value))
 
 
@@ -57,12 +54,9 @@ def _vote(name: str, value: Any, reason: str) -> Vote:
 
 def _history_edge(context: dict[str, Any]) -> tuple[float, int, str]:
     n = int(context.get("history_count", 0) or 0)
-    win_rate = float(context.get("history_win_rate", 0) or 0)
-    expectancy = float(context.get("history_expectancy", 0) or 0)
-    if n < MIN_HISTORY:
-        return 0.0, 0, f"insufficient comparable history ({n}/{MIN_HISTORY})"
-    if not 0.0 <= win_rate <= 1.0:
-        return 0.0, 0, "invalid historical win rate"
+    win_rate, expectancy = float(context.get("history_win_rate", 0) or 0), float(context.get("history_expectancy", 0) or 0)
+    if n < MIN_HISTORY: return 0.0, 0, f"insufficient comparable history ({n}/{MIN_HISTORY})"
+    if not 0.0 <= win_rate <= 1.0: return 0.0, 0, "invalid historical win rate"
     edge = max(0.0, min(1.0, 0.5 * win_rate + 0.5 * (1.0 if expectancy > 0 else 0.0)))
     raw_direction = context.get("history_direction", context.get("direction", 0))
     direction = 1 if raw_direction > 0 else -1 if raw_direction < 0 else 0
@@ -72,8 +66,7 @@ def _history_edge(context: dict[str, Any]) -> tuple[float, int, str]:
 def _legacy_liquidity(context: dict[str, Any], direction: int, reasons: list[str]) -> tuple[float, dict[str, Any] | None]:
     matrix = context.get("liquidity_matrix")
     if isinstance(matrix, dict):
-        if not bool(matrix.get("usable", False)):
-            reasons.append(str(matrix.get("reason", "multi-timeframe liquidity rejected")))
+        if not bool(matrix.get("usable", False)): reasons.append(str(matrix.get("reason", "multi-timeframe liquidity rejected")))
         return _clamp(matrix.get("score", 0.0)), matrix
     if "liquidity_score" not in context:
         reasons.append("missing multi-timeframe liquidity evidence")
@@ -90,13 +83,13 @@ def evaluate_committee(context: dict[str, Any]) -> CommitteeDecision:
 
     liquidity_score, liquidity = _legacy_liquidity(context, direction, reasons)
     expiry = context.get("expiry_analysis")
+    if not isinstance(expiry, dict) and context.get("expiry_instruments") is not None:
+        expiry = analyze_expiries(context.get("expiry_instruments"), market_type=str(context.get("market_type", "derivative")))
     if not isinstance(expiry, dict):
-        instruments = context.get("expiry_instruments")
-        if instruments is not None:
-            expiry = analyze_expiries(instruments, market_type=str(context.get("market_type", "derivative")))
-    if not isinstance(expiry, dict):
-        # Explicit spot/cash candidates can safely proceed without expiry.
-        if str(context.get("market_type", "derivative")).lower() in {"spot", "cash"}:
+        market_type = str(context.get("market_type", "")).lower()
+        # Expiry is a hard gate only when the caller explicitly identifies an
+        # expiring/derivative market or requests expiry evidence.
+        if market_type in {"spot", "cash"} or not bool(context.get("expiry_required", False)):
             expiry = analyze_expiries(None, market_type="spot")
         else:
             expiry = {"status": "UNKNOWN", "usable": False, "score": 0.0, "reason": "expiry evidence unavailable"}
@@ -112,8 +105,7 @@ def evaluate_committee(context: dict[str, Any]) -> CommitteeDecision:
         _vote("structure", context.get("structure_score", 0), "market structure"),
     ]
     history_edge, history_direction, history_reason = _history_edge(context)
-    if int(context.get("history_count", 0) or 0) < MIN_HISTORY:
-        reasons.append(history_reason)
+    if int(context.get("history_count", 0) or 0) < MIN_HISTORY: reasons.append(history_reason)
     votes.append(_vote("history", history_edge if history_direction == direction else -history_edge, history_reason))
     votes.append(_vote("news", context.get("news_score", 0), "news/sentiment filter"))
     expiry_score = _clamp(expiry.get("score", 0.0)) if expiry.get("status") != "NOT_APPLICABLE" else 1.0
@@ -134,13 +126,11 @@ def evaluate_committee(context: dict[str, Any]) -> CommitteeDecision:
     if liquidity_score <= 0.0: reasons.append("liquidity evidence unavailable or failed")
     rr = float(context.get("risk_reward", 0) or 0)
     if rr < MIN_RR: reasons.append(f"risk/reward {rr:.2f} below {MIN_RR:.2f}")
-    spread = float(context.get("spread_bps", 0) or 0)
-    slip = float(context.get("expected_slippage_bps", 0) or 0)
+    spread, slip = float(context.get("spread_bps", 0) or 0), float(context.get("expected_slippage_bps", 0) or 0)
     if spread > MAX_SPREAD_BPS: reasons.append("spread too wide")
     if slip > MAX_SLIPPAGE_BPS: reasons.append("expected slippage too high")
     if not bool(context.get("risk_ok", False)): reasons.append("risk firewall rejected candidate")
-    adversarial = _clamp(context.get("adversarial_score", 0))
-    if adversarial < 0.0: reasons.append("adversarial review found a strong failure case")
+    if _clamp(context.get("adversarial_score", 0)) < 0.0: reasons.append("adversarial review found a strong failure case")
     if not bool(context.get("execution_ok", False)): reasons.append("execution-quality gate failed")
     decision = "TRADE" if not reasons else "NO_TRADE"
     return CommitteeDecision(decision, direction, round(score, 6), round(agreement, 6), round(history_edge, 6), tuple(reasons), tuple(votes), liquidity, expiry)
