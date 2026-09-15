@@ -1,10 +1,11 @@
--- PostgreSQL baseline schema. Secrets are never stored in plaintext.
+-- CompoundX PostgreSQL schema. Apply once to the production database.
+-- Secrets are never stored in plaintext.
 
 CREATE TABLE IF NOT EXISTS users (
   id UUID PRIMARY KEY,
   email TEXT UNIQUE NOT NULL,
   role TEXT NOT NULL CHECK (role IN ('admin', 'user')),
-  password_hash TEXT,
+  password_hash TEXT NOT NULL,
   totp_secret_encrypted BYTEA,
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -18,7 +19,8 @@ CREATE TABLE IF NOT EXISTS access_codes (
   redeemed_at TIMESTAMPTZ,
   redeemed_by UUID REFERENCES users(id),
   revoked_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (redeemed_at IS NULL OR redeemed_by IS NOT NULL)
 );
 
 CREATE TABLE IF NOT EXISTS audit_events (
@@ -47,6 +49,13 @@ CREATE TABLE IF NOT EXISTS trades (
   closed_at TIMESTAMPTZ
 );
 
+CREATE TABLE IF NOT EXISTS rate_limits (
+  bucket_key TEXT PRIMARY KEY,
+  window_started_at TIMESTAMPTZ NOT NULL,
+  request_count INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE INDEX IF NOT EXISTS idx_access_codes_expiry ON access_codes (expires_at);
 CREATE INDEX IF NOT EXISTS idx_audit_events_created_at ON audit_events (created_at);
 CREATE INDEX IF NOT EXISTS idx_trades_opened_at ON trades (opened_at);
+CREATE INDEX IF NOT EXISTS idx_rate_limits_window ON rate_limits (window_started_at);
