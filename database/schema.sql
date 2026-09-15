@@ -79,6 +79,36 @@ CREATE TABLE IF NOT EXISTS learning_reviews (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS ai_committee_reviews (
+  id BIGSERIAL PRIMARY KEY,
+  fingerprint TEXT NOT NULL,
+  decision TEXT NOT NULL CHECK (decision IN ('TRADE', 'NO_TRADE')),
+  direction SMALLINT NOT NULL CHECK (direction IN (-1, 0, 1)),
+  score NUMERIC NOT NULL CHECK (score >= 0 AND score <= 1),
+  agreement NUMERIC NOT NULL CHECK (agreement >= 0 AND agreement <= 1),
+  historical_edge NUMERIC NOT NULL CHECK (historical_edge >= 0 AND historical_edge <= 1),
+  reasons JSONB NOT NULL DEFAULT '[]'::jsonb,
+  votes JSONB NOT NULL DEFAULT '[]'::jsonb,
+  live_execution_allowed BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS validation_runs (
+  id BIGSERIAL PRIMARY KEY,
+  validation_type TEXT NOT NULL CHECK (validation_type IN ('BACKTEST', 'WALK_FORWARD', 'PAPER')),
+  samples INTEGER NOT NULL CHECK (samples >= 0),
+  win_rate NUMERIC NOT NULL CHECK (win_rate >= 0 AND win_rate <= 1),
+  expectancy NUMERIC NOT NULL,
+  profit_factor NUMERIC NOT NULL,
+  max_drawdown NUMERIC NOT NULL CHECK (max_drawdown >= 0),
+  sharpe NUMERIC NOT NULL,
+  brier_score NUMERIC NOT NULL CHECK (brier_score >= 0),
+  calibration_error NUMERIC NOT NULL CHECK (calibration_error >= 0),
+  passed BOOLEAN NOT NULL,
+  failures JSONB NOT NULL DEFAULT '[]'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS rate_limits (
   bucket_key TEXT PRIMARY KEY,
   window_started_at TIMESTAMPTZ NOT NULL,
@@ -92,3 +122,6 @@ CREATE INDEX IF NOT EXISTS idx_rate_limits_window ON rate_limits (window_started
 CREATE INDEX IF NOT EXISTS idx_trade_lessons_fingerprint ON trade_lessons (fingerprint, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_trade_lessons_trade ON trade_lessons (trade_id);
 CREATE INDEX IF NOT EXISTS idx_learning_reviews_created_at ON learning_reviews (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ai_committee_reviews_created_at ON ai_committee_reviews (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ai_committee_reviews_fingerprint ON ai_committee_reviews (fingerprint, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_validation_runs_created_at ON validation_runs (created_at DESC);
