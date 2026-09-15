@@ -37,10 +37,16 @@ class ExchangeGateway:
         return self.exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
 
     def multi_timeframe_market_data(self, symbol: str, *, limit: int = 250, orderbook_limit: int = 100) -> dict[str, dict]:
+        """Pair timeframe-specific candles with one instantaneous order-book snapshot.
+
+        An order book does not have a candle timeframe; reusing one snapshot avoids
+        multiplying exchange requests while keeping the time-series context distinct.
+        """
         data = {}
+        book = self.order_book(symbol, limit=orderbook_limit)
         for timeframe in self.supported_timeframes():
             candles = self.ohlcv(symbol, timeframe=timeframe, limit=limit)
-            data[timeframe] = {"ohlcv": candles, "orderbook": self.order_book(symbol, limit=orderbook_limit), "volume": candles[-1][5] if candles else 0.0, "average_volume": sum(row[5] for row in candles[-20:]) / max(1, len(candles[-20:])) if candles else 0.0}
+            data[timeframe] = {"ohlcv": candles, "orderbook": book, "volume": candles[-1][5] if candles else 0.0, "average_volume": sum(row[5] for row in candles[-20:]) / max(1, len(candles[-20:])) if candles else 0.0}
         return data
 
     def derivatives_market_data(self, symbol: str) -> dict:
