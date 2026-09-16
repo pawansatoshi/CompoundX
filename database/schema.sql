@@ -29,8 +29,6 @@ CREATE TABLE IF NOT EXISTS ai_committee_reviews (
 CREATE TABLE IF NOT EXISTS validation_runs (
   id BIGSERIAL PRIMARY KEY, validation_type TEXT NOT NULL CHECK (validation_type IN ('BACKTEST','WALK_FORWARD','PAPER')), samples INTEGER NOT NULL CHECK (samples>=0), win_rate NUMERIC NOT NULL CHECK (win_rate>=0 AND win_rate<=1), expectancy NUMERIC NOT NULL, profit_factor NUMERIC NOT NULL, max_drawdown NUMERIC NOT NULL CHECK (max_drawdown>=0), sharpe NUMERIC NOT NULL, brier_score NUMERIC NOT NULL CHECK (brier_score>=0), calibration_error NUMERIC NOT NULL CHECK (calibration_error>=0), passed BOOLEAN NOT NULL, failures JSONB NOT NULL DEFAULT '[]'::jsonb, created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-
--- Autonomous research state and specialist calibration are persisted separately from trades.
 CREATE TABLE IF NOT EXISTS strategy_registry (
   strategy_id TEXT PRIMARY KEY, family TEXT NOT NULL, version TEXT NOT NULL, state TEXT NOT NULL,
   config JSONB NOT NULL DEFAULT '{}'::jsonb, metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -50,6 +48,15 @@ CREATE TABLE IF NOT EXISTS market_observations (
   id BIGSERIAL PRIMARY KEY, symbol TEXT NOT NULL, timeframe TEXT NOT NULL, observed_at TIMESTAMPTZ NOT NULL,
   source TEXT NOT NULL, freshness_seconds NUMERIC, quality NUMERIC NOT NULL CHECK (quality>=0 AND quality<=1), features JSONB NOT NULL DEFAULT '{}'::jsonb
 );
+CREATE TABLE IF NOT EXISTS exchange_connections (
+  id UUID PRIMARY KEY, user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  exchange_id TEXT NOT NULL, mode TEXT NOT NULL CHECK (mode IN ('DEMO','LIVE')),
+  api_key_encrypted BYTEA NOT NULL, secret_encrypted BYTEA NOT NULL, passphrase_encrypted BYTEA,
+  label TEXT NOT NULL DEFAULT '', enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(user_id, exchange_id, mode)
+);
+CREATE INDEX IF NOT EXISTS idx_exchange_connections_user ON exchange_connections(user_id,exchange_id,mode);
 
 CREATE TABLE IF NOT EXISTS rate_limits (bucket_key TEXT PRIMARY KEY, window_started_at TIMESTAMPTZ NOT NULL, request_count INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX IF NOT EXISTS idx_access_codes_expiry ON access_codes(expires_at);
