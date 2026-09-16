@@ -4,8 +4,9 @@ from pathlib import Path
 from urllib.parse import parse_qs,urlparse
 BACKEND=Path(__file__).resolve().parents[2]/'backend'
 if str(BACKEND) not in sys.path: sys.path.insert(0,str(BACKEND))
-from compoundx.autonomous_intelligence import build_autonomous_intelligence
 from compoundx.adaptive_intelligence import adaptive_snapshot,calibrated_probability,counterfactual_matrix,dynamic_risk_size,evidence_dependency,regime_distribution,self_critique,signal_half_life
+from compoundx.adaptive_persistence import persist_adaptive_decision
+from compoundx.autonomous_intelligence import build_autonomous_intelligence
 from compoundx.db import connection,is_configured
 from compoundx.derivatives_gate import final_derivatives_options_gate,derivatives_options_advisory
 from compoundx.economic_calendar import committee_calendar_gate,fetch_calendar
@@ -81,6 +82,10 @@ def _adaptive(result,market_data,ledger,equity):
         result['decision']='NO_TRADE'; result.setdefault('reasons',[]).append('trade thesis fails stressed net-EV scenarios')
     if result['adaptive_intelligence']['signal_half_life'].get('stale') and result.get('decision')=='TRADE':
         result['decision']='NO_TRADE'; result.setdefault('reasons',[]).append('signal edge is stale')
+    try:
+        result['adaptive_persistence']=persist_adaptive_decision(result,symbol=result.get('symbol', 'UNKNOWN'))
+    except Exception as exc:
+        result['adaptive_persistence']={'persisted':False,'reason':'persistence error','error':str(exc)}
     return result
 
 def _apply_intelligence(result,symbol,market_data,derivatives,expiry,expiry_market_data,equity):
@@ -99,7 +104,7 @@ def _apply_intelligence(result,symbol,market_data,derivatives,expiry,expiry_mark
 
 def _scan(symbol,exchange_id,sandbox,equity,limit):
     gateway=ExchangeGateway(exchange_id=exchange_id,sandbox=sandbox); md=gateway.multi_timeframe_market_data(symbol,limit=limit,orderbook_limit=100); d=gateway.derivatives_market_data(symbol); ed=gateway.expiry_market_data(symbol,limit=100); e=analyze_expiries(ed.get('instruments'),market_type=ed.get('market_type','spot'))
-    result=build_command_center(symbol,md,d,e,equity=equity); result.update({'exchange':exchange_id,'sandbox':sandbox,'data_source':'exchange_public_market_data','supported_timeframes':gateway.supported_timeframes(),'live_execution':False,'8_percent_daily_target':{'enabled':False,'policy':'research hypothesis only; never a trading target'}})
+    result=build_command_center(symbol,md,d,e,equity=equity); result.update({'symbol':symbol,'exchange':exchange_id,'sandbox':sandbox,'data_source':'exchange_public_market_data','supported_timeframes':gateway.supported_timeframes(),'live_execution':False,'8_percent_daily_target':{'enabled':False,'policy':'research hypothesis only; never a trading target'}})
     return _apply_intelligence(_apply_macro_gate(result,symbol),symbol,md,d,e,ed,equity)
 
 class handler(BaseHTTPRequestHandler):
