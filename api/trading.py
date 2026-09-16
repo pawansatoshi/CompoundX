@@ -35,6 +35,20 @@ def _credentials(user_id: str, exchange_id: str, mode: str) -> dict[str, str]:
     return {"api_key": _dec(row[0]), "secret": _dec(row[1]), "password": _dec(row[2]) if row[2] else ""}
 
 
+def _saved_connections(user_id: str) -> list[dict]:
+    if not is_configured():
+        return []
+    with connection() as conn:
+        cur = conn.execute(
+            "SELECT exchange_id,mode,label,enabled,updated_at FROM exchange_connections WHERE user_id=%s ORDER BY exchange_id,mode",
+            (uuid.UUID(user_id),),
+        )
+        return [
+            {"exchange": r[0], "mode": r[1], "label": r[2], "enabled": bool(r[3]), "updated_at": r[4].isoformat() if r[4] else None}
+            for r in cur.fetchall()
+        ]
+
+
 def _save(user_id: str, body: dict) -> dict:
     exchange_id = str(body.get("exchange", "")).strip().lower()
     mode = str(body.get("mode", "DEMO")).strip().upper()
@@ -42,16 +56,19 @@ def _save(user_id: str, body: dict) -> dict:
     secret = str(body.get("secret", "")).strip()
     passphrase = str(body.get("passphrase", "")).strip()
     label = str(body.get("label", "")).strip()[:80]
-    if exchange_id not in SUPPORTED_EXCHANGES:
+    meta = SUPPORTED_EXCHANGES.get(exchange_id)
+    if not meta:
         raise ValueError("unsupported exchange")
     if mode not in {"DEMO", "LIVE"}:
         raise ValueError("mode must be DEMO or LIVE")
     if not api_key or not secret:
         raise ValueError("api_key and secret are required")
-    if mode == "LIVE" and os.getenv("LIVE_TRADING_ENABLED", "false").lower() != "true":
-        raise PermissionError("live trading is not enabled on this deployment")
+    if "passphrase" in meta.get("credential_fields", []) and not passphrase:
+        raise ValueError(f"{meta['name']} requires a passphrase/password for this connection")
     if not is_configured():
         raise RuntimeError("Database is not configured")
+    # Saving a LIVE key is intentionally allowed while live execution remains disabled.
+    # This separates credential setup from the irreversible decision to permit live orders.
     with connection() as conn:
         conn.execute(
             """INSERT INTO exchange_connections(id,user_id,exchange_id,mode,api_key_encrypted,secret_encrypted,passphrase_encrypted,label,enabled)
@@ -59,10 +76,15 @@ def _save(user_id: str, body: dict) -> dict:
                ON CONFLICT(user_id,exchange_id,mode) DO UPDATE SET api_key_encrypted=EXCLUDED.api_key_encrypted,secret_encrypted=EXCLUDED.secret_encrypted,passphrase_encrypted=EXCLUDED.passphrase_encrypted,label=EXCLUDED.label,enabled=TRUE,updated_at=now()""",
             (uuid.uuid4(), uuid.UUID(user_id), exchange_id, mode, _enc(api_key), _enc(secret), _enc(passphrase) if passphrase else None, label),
         )
-    return {"ok": True, "exchange": exchange_id, "mode": mode, "configured": True}
+    return {"ok": True, "exchange": exchange_id, "mode": mode, "configured": True, "adapter": meta.get("adapter", "ccxt")}
 
 
 def _test(user_id: str, exchange_id: str, mode: str) -> dict:
+    meta = SUPPORTED_EXCHANGES.get(exchange_id)
+    if not meta:
+        raise ValueError("unsupported exchange")
+    if meta.get("adapter") != "ccxt":
+        raise ValueError(f"{meta['name']} credentials can be stored securely, but its direct execution adapter is not yet wired")
     credentials = _credentials(user_id, exchange_id, mode)
     gateway = ExchangeGateway(exchange_id=exchange_id, sandbox=(mode == "DEMO"), credentials=credentials)
     balance = gateway.balance()
@@ -80,6 +102,13 @@ def _order(user_id: str, body: dict) -> dict:
     amount = float(body.get("amount", 0) or 0)
     price = body.get("price")
     price = float(price) if price is not None else None
+    meta = SUPPORTED_EXCHANGES.get(exchange_id)
+    if not meta:
+        raise ValueError("unsupported exchange")
+    if mode not in {"DEMO", "LIVE"}:
+        raise ValueError("mode must be DEMO or LIVE")
+    if meta.get("adapter") != "ccxt":
+        raise ValueError(f"{meta['name']} direct execution adapter is not yet wired")
     if mode == "LIVE":
         if os.getenv("LIVE_TRADING_ENABLED", "false").lower() != "true":
             raise PermissionError("live trading is disabled")
@@ -101,7 +130,12 @@ class handler(BaseHTTPRequestHandler):
     def do_GET(self):
         try:
             claims = bearer_claims(self)
-            send_json(self, {"exchanges": exchange_catalog(), "live_enabled": os.getenv("LIVE_TRADING_ENABLED", "false").lower() == "true", "user": claims.get("email")})
+            send_json(self, {
+                "exchanges": exchange_catalog(),
+                "connections": _saved_connections(claims["sub"]),
+                "live_enabled": os.getenv("LIVE_TRADING_ENABLED", "false").lower() == "true",
+                "user": claims.get("email"),
+            })
         except PermissionError as exc:
             send_json(self, {"detail": str(exc)}, 401)
         except Exception as exc:
