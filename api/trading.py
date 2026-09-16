@@ -8,10 +8,10 @@ BACKEND = Path(__file__).resolve().parents[1] / "backend"
 if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
-from compoundx.auth import _fernet
+from compoundx.auth import _fernet, decode_token
 from compoundx.db import connection, is_configured
 from compoundx.exchange import ExchangeGateway, SUPPORTED_EXCHANGES, exchange_catalog
-from compoundx.vercel_http import bearer_claims, read_json, send_json
+from compoundx.vercel_http import read_json, send_json
 
 
 def _enc(value: str) -> bytes:
@@ -20,6 +20,19 @@ def _enc(value: str) -> bytes:
 
 def _dec(value: bytes) -> str:
     return _fernet().decrypt(value).decode("utf-8")
+
+
+def _claims(handler) -> dict:
+    value = handler.headers.get("Authorization", "")
+    if not value.startswith("Bearer "):
+        raise PermissionError("Authentication required")
+    try:
+        claims = decode_token(value[7:].strip())
+    except Exception as exc:
+        raise PermissionError("Invalid or expired token") from exc
+    if claims.get("role") not in {"admin", "user"}:
+        raise PermissionError("Trading access denied")
+    return claims
 
 
 def _credentials(user_id: str, exchange_id: str, mode: str) -> dict[str, str]:
@@ -67,8 +80,6 @@ def _save(user_id: str, body: dict) -> dict:
         raise ValueError(f"{meta['name']} requires a passphrase/password for this connection")
     if not is_configured():
         raise RuntimeError("Database is not configured")
-    # Saving a LIVE key is intentionally allowed while live execution remains disabled.
-    # This separates credential setup from the irreversible decision to permit live orders.
     with connection() as conn:
         conn.execute(
             """INSERT INTO exchange_connections(id,user_id,exchange_id,mode,api_key_encrypted,secret_encrypted,passphrase_encrypted,label,enabled)
@@ -102,6 +113,8 @@ def _order(user_id: str, body: dict) -> dict:
     amount = float(body.get("amount", 0) or 0)
     price = body.get("price")
     price = float(price) if price is not None else None
+    if not symbol or side not in {"buy", "sell"} or order_type not in {"market", "limit"} or amount <= 0:
+        raise ValueError("invalid order parameters")
     meta = SUPPORTED_EXCHANGES.get(exchange_id)
     if not meta:
         raise ValueError("unsupported exchange")
@@ -129,12 +142,13 @@ def _order(user_id: str, body: dict) -> dict:
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
         try:
-            claims = bearer_claims(self)
+            claims = _claims(self)
             send_json(self, {
                 "exchanges": exchange_catalog(),
                 "connections": _saved_connections(claims["sub"]),
                 "live_enabled": os.getenv("LIVE_TRADING_ENABLED", "false").lower() == "true",
                 "user": claims.get("email"),
+                "role": claims.get("role"),
             })
         except PermissionError as exc:
             send_json(self, {"detail": str(exc)}, 401)
@@ -143,7 +157,7 @@ class handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         try:
-            claims = bearer_claims(self)
+            claims = _claims(self)
             body = read_json(self)
             action = str(body.get("action", "")).strip().lower()
             if action == "save":
