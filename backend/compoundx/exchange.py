@@ -30,14 +30,7 @@ def exchange_catalog() -> list[dict[str, Any]]:
     for exchange_id, meta in SUPPORTED_EXCHANGES.items():
         available = hasattr(ccxt, exchange_id)
         adapter = meta.get("adapter", "ccxt")
-        result.append({
-            "id": exchange_id,
-            **meta,
-            "ccxt_available": available,
-            "demo_supported": available,
-            "live_supported": available and adapter == "ccxt",
-            "connection_ready": True,
-        })
+        result.append({"id": exchange_id, **meta, "ccxt_available": available, "demo_supported": available, "live_supported": available and adapter == "ccxt", "connection_ready": True})
     return result
 
 
@@ -63,9 +56,8 @@ class ExchangeGateway:
         self.sandbox = bool(sandbox)
         self.exchange = getattr(ccxt, exchange_id)(config)
         if exchange_id == "delta":
-            # Delta has distinct India production and India testnet hosts.
             self.exchange.urls["api"] = "https://cdn-ind.testnet.deltaex.org" if sandbox else "https://api.india.delta.exchange"
-        if sandbox:
+        elif sandbox:
             try:
                 self.exchange.set_sandbox_mode(True)
             except Exception:
@@ -112,66 +104,38 @@ class ExchangeGateway:
         out = {"available": False, "symbol": market_symbol, "funding_rate": 0.0, "open_interest": 0.0, "open_interest_change_pct": 0.0, "basis_pct": 0.0, "liquidations_24h": 0.0, "markets": len(candidates)}
         try:
             if self.exchange.has.get("fetchFundingRate"):
-                funding = self.exchange.fetch_funding_rate(market_symbol)
-                out["funding_rate"] = funding.get("fundingRate") or 0.0
-                out["available"] = True
-        except Exception:
-            pass
+                funding = self.exchange.fetch_funding_rate(market_symbol); out["funding_rate"] = funding.get("fundingRate") or 0.0; out["available"] = True
+        except Exception: pass
         try:
             if self.exchange.has.get("fetchOpenInterest"):
-                oi = self.exchange.fetch_open_interest(market_symbol)
-                out["open_interest"] = oi.get("openInterestValue") or oi.get("openInterestAmount") or 0.0
-                out["available"] = True
-        except Exception:
-            pass
+                oi = self.exchange.fetch_open_interest(market_symbol); out["open_interest"] = oi.get("openInterestValue") or oi.get("openInterestAmount") or 0.0; out["available"] = True
+        except Exception: pass
         try:
-            spot = self.exchange.fetch_ticker(symbol)
-            perp = self.exchange.fetch_ticker(market_symbol)
-            spot_last, perp_last = spot.get("last"), perp.get("last")
-            if spot_last and perp_last:
-                out["basis_pct"] = (float(perp_last) / float(spot_last) - 1.0) * 100.0
-                out["available"] = True
-        except Exception:
-            pass
+            spot = self.exchange.fetch_ticker(symbol); perp = self.exchange.fetch_ticker(market_symbol); spot_last, perp_last = spot.get("last"), perp.get("last")
+            if spot_last and perp_last: out["basis_pct"] = (float(perp_last) / float(spot_last) - 1.0) * 100.0; out["available"] = True
+        except Exception: pass
         return out
 
     def expiry_market_data(self, symbol: str, *, limit: int = 100) -> dict:
-        self.exchange.load_markets()
-        base = symbol.split("/")[0]
-        markets = []
+        self.exchange.load_markets(); base = symbol.split("/")[0]; markets = []
         for market in self.exchange.markets.values():
-            if market.get("base") != base or not market.get("expiry"):
-                continue
+            if market.get("base") != base or not market.get("expiry"): continue
             item = {"symbol": market.get("symbol"), "id": market.get("id"), "type": market.get("type"), "contract": market.get("contract"), "option": market.get("option"), "expiry": market.get("expiry"), "strike": market.get("strike"), "optionType": market.get("optionType")}
             try:
-                ticker = self.exchange.fetch_ticker(item["symbol"])
-                item["volume"] = ticker.get("baseVolume") or ticker.get("quoteVolume") or 0.0
-                bid, ask = ticker.get("bid"), ticker.get("ask")
-                item["spread_bps"] = ((ask - bid) / ((ask + bid) / 2.0) * 10000.0) if bid and ask and ask >= bid else 0.0
-                info = ticker.get("info") or {}
-                item["implied_volatility"] = info.get("impliedVolatility") or info.get("markIv")
-            except Exception:
-                item["volume"], item["spread_bps"] = 0.0, 0.0
+                ticker = self.exchange.fetch_ticker(item["symbol"]); item["volume"] = ticker.get("baseVolume") or ticker.get("quoteVolume") or 0.0; bid, ask = ticker.get("bid"), ticker.get("ask"); item["spread_bps"] = ((ask - bid) / ((ask + bid) / 2.0) * 10000.0) if bid and ask and ask >= bid else 0.0; info = ticker.get("info") or {}; item["implied_volatility"] = info.get("impliedVolatility") or info.get("markIv")
+            except Exception: item["volume"], item["spread_bps"] = 0.0, 0.0
             try:
                 if self.exchange.has.get("fetchOpenInterest"):
-                    oi = self.exchange.fetch_open_interest(item["symbol"])
-                    item["open_interest"] = oi.get("openInterestValue") or oi.get("openInterestAmount") or 0.0
-            except Exception:
-                item["open_interest"] = 0.0
+                    oi = self.exchange.fetch_open_interest(item["symbol"]); item["open_interest"] = oi.get("openInterestValue") or oi.get("openInterestAmount") or 0.0
+            except Exception: item["open_interest"] = 0.0
             markets.append(item)
-            if len(markets) >= limit:
-                break
+            if len(markets) >= limit: break
         return {"market_type": "derivative", "instruments": markets}
 
     def create_order(self, symbol: str, side: str, amount: float, order_type: str = "market", price: float | None = None, params: dict | None = None) -> dict:
-        if amount <= 0:
-            raise ValueError("order amount must be positive")
-        side = side.lower()
-        order_type = order_type.lower()
-        if side not in {"buy", "sell"}:
-            raise ValueError("side must be buy or sell")
-        if order_type not in {"market", "limit"}:
-            raise ValueError("order type must be market or limit")
-        if order_type == "limit" and (price is None or price <= 0):
-            raise ValueError("limit orders require a positive price")
+        if amount <= 0: raise ValueError("order amount must be positive")
+        side = side.lower(); order_type = order_type.lower()
+        if side not in {"buy", "sell"}: raise ValueError("side must be buy or sell")
+        if order_type not in {"market", "limit"}: raise ValueError("order type must be market or limit")
+        if order_type == "limit" and (price is None or price <= 0): raise ValueError("limit orders require a positive price")
         return self.exchange.create_order(symbol, order_type, side, amount, price, params or {})
