@@ -1,26 +1,25 @@
 from __future__ import annotations
 
-import os
 from typing import Any
 
 import ccxt
 
 
 SUPPORTED_EXCHANGES = {
-    "delta": {"name": "Delta Exchange", "markets": "spot, futures, options", "india": True},
-    "binance": {"name": "Binance", "markets": "spot, futures, options", "india": False},
-    "bitget": {"name": "Bitget", "markets": "spot, futures, options", "india": False},
-    "okx": {"name": "OKX", "markets": "spot, futures, options", "india": False},
-    "bybit": {"name": "Bybit", "markets": "spot, futures, options", "india": False},
-    "coinbase": {"name": "Coinbase", "markets": "spot, derivatives where available", "india": False},
-    "kraken": {"name": "Kraken", "markets": "spot, derivatives where available", "india": False},
-    "gateio": {"name": "Gate.io", "markets": "spot, futures", "india": False},
-    "kucoin": {"name": "KuCoin", "markets": "spot, futures", "india": False},
-    "mexc": {"name": "MEXC", "markets": "spot, futures", "india": False},
-    "bingx": {"name": "BingX", "markets": "spot, futures", "india": False},
-    "phemex": {"name": "Phemex", "markets": "spot, futures", "india": False},
-    "coindcx": {"name": "CoinDCX", "markets": "spot, futures", "india": True},
-    "coinswitch": {"name": "CoinSwitch", "markets": "spot, futures, options", "india": True},
+    "delta": {"name": "Delta Exchange", "markets": "spot, futures, options", "india": True, "credential_fields": ["api_key", "secret"], "adapter": "ccxt"},
+    "binance": {"name": "Binance", "markets": "spot, futures, options", "india": False, "credential_fields": ["api_key", "secret"], "adapter": "ccxt"},
+    "bitget": {"name": "Bitget", "markets": "spot, futures, options", "india": False, "credential_fields": ["api_key", "secret", "passphrase"], "adapter": "ccxt"},
+    "okx": {"name": "OKX", "markets": "spot, futures, options", "india": False, "credential_fields": ["api_key", "secret", "passphrase"], "adapter": "ccxt"},
+    "bybit": {"name": "Bybit", "markets": "spot, futures, options", "india": False, "credential_fields": ["api_key", "secret"], "adapter": "ccxt"},
+    "coinbase": {"name": "Coinbase", "markets": "spot, derivatives where available", "india": False, "credential_fields": ["api_key", "secret", "passphrase"], "adapter": "ccxt"},
+    "kraken": {"name": "Kraken", "markets": "spot, derivatives where available", "india": False, "credential_fields": ["api_key", "secret"], "adapter": "ccxt"},
+    "gateio": {"name": "Gate.io", "markets": "spot, futures", "india": False, "credential_fields": ["api_key", "secret", "passphrase"], "adapter": "ccxt"},
+    "kucoin": {"name": "KuCoin", "markets": "spot, futures", "india": False, "credential_fields": ["api_key", "secret", "passphrase"], "adapter": "ccxt"},
+    "mexc": {"name": "MEXC", "markets": "spot, futures", "india": False, "credential_fields": ["api_key", "secret"], "adapter": "ccxt"},
+    "bingx": {"name": "BingX", "markets": "spot, futures", "india": False, "credential_fields": ["api_key", "secret"], "adapter": "ccxt"},
+    "phemex": {"name": "Phemex", "markets": "spot, futures", "india": False, "credential_fields": ["api_key", "secret"], "adapter": "ccxt"},
+    "coindcx": {"name": "CoinDCX", "markets": "spot, futures", "india": True, "credential_fields": ["api_key", "secret"], "adapter": "ccxt"},
+    "coinswitch": {"name": "CoinSwitch", "markets": "spot, futures, options", "india": True, "credential_fields": ["api_key", "secret"], "adapter": "direct_pending"},
 }
 
 DEFAULT_TIMEFRAMES = ("1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w")
@@ -30,21 +29,28 @@ def exchange_catalog() -> list[dict[str, Any]]:
     result = []
     for exchange_id, meta in SUPPORTED_EXCHANGES.items():
         available = hasattr(ccxt, exchange_id)
-        result.append({"id": exchange_id, **meta, "ccxt_available": available, "demo_supported": True, "live_supported": available})
+        adapter = meta.get("adapter", "ccxt")
+        result.append({
+            "id": exchange_id,
+            **meta,
+            "ccxt_available": available,
+            "demo_supported": available,
+            "live_supported": available and adapter == "ccxt",
+            "connection_ready": True,
+        })
     return result
 
 
 class ExchangeGateway:
-    """Unified market/execution gateway.
-
-    Public market data remains available without credentials. Credentials are supplied
-    explicitly for demo/live execution and are never read from the browser.
-    """
+    """Unified market/execution gateway with explicit environment handling."""
 
     def __init__(self, exchange_id: str = "binance", sandbox: bool = True, credentials: dict[str, str] | None = None):
         exchange_id = str(exchange_id).strip().lower()
         if exchange_id not in SUPPORTED_EXCHANGES:
             raise ValueError(f"unsupported exchange: {exchange_id}")
+        meta = SUPPORTED_EXCHANGES[exchange_id]
+        if meta.get("adapter") != "ccxt":
+            raise ValueError(f"direct adapter is not yet wired for {exchange_id}")
         if not hasattr(ccxt, exchange_id):
             raise ValueError(f"exchange adapter unavailable in installed CCXT: {exchange_id}")
         credentials = credentials or {}
@@ -56,11 +62,13 @@ class ExchangeGateway:
         self.exchange_id = exchange_id
         self.sandbox = bool(sandbox)
         self.exchange = getattr(ccxt, exchange_id)(config)
+        if exchange_id == "delta":
+            # Delta has distinct India production and India testnet hosts.
+            self.exchange.urls["api"] = "https://cdn-ind.testnet.deltaex.org" if sandbox else "https://api.india.delta.exchange"
         if sandbox:
             try:
                 self.exchange.set_sandbox_mode(True)
             except Exception:
-                # Some exchanges do not expose a sandbox endpoint through CCXT.
                 pass
 
     def ticker(self, symbol: str) -> dict:
