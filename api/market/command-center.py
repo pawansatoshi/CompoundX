@@ -61,10 +61,14 @@ def _adaptive(result,market_data,ledger,equity):
     result['adaptive_intelligence']=adaptive_snapshot(result.get('autonomous_intelligence',{}),baseline=result.get('strategy_baseline'),specialist_records=result.get('specialist_calibration',[]))
     result['adaptive_intelligence']['regime_distribution']=regime
     result['adaptive_intelligence']['evidence_dependency']=evidence_dependency(result.get('autonomous_intelligence',{}).get('votes',[]))
-    p=calibrated_probability(float(result.get('score',0.5) or 0.5),float(result.get('adaptive_intelligence',{}).get('probability',{}).get('calibrated',0.5) or 0.5),float(result.get('uncertainty',0.0) or 0.0))
+    p=calibrated_probability(float(result.get('score',0.5) or 0.5),1.0,float(result.get('uncertainty',0.0) or 0.0))
     result['adaptive_intelligence']['final_probability']=p
-    net_ev=float(result.get('net_expected_value',result.get('expected_value',0.0)) or 0.0)
-    result['adaptive_intelligence']['counterfactual']=counterfactual_matrix(net_ev,float(result.get('execution_cost',0.0) or 0.0))
+    raw_ev=result.get('net_expected_value',result.get('expected_value'))
+    net_ev=float(raw_ev) if raw_ev is not None else None
+    if net_ev is not None:
+        result['adaptive_intelligence']['counterfactual']=counterfactual_matrix(net_ev,float(result.get('execution_cost',0.0) or 0.0))
+    else:
+        result['adaptive_intelligence']['counterfactual']={'available':False,'reason':'net expected value unavailable; no synthetic EV is invented'}
     entry=float(result.get('entry_price',0) or 0); stop=float(result.get('stop_loss',0) or 0)
     if entry>0 and stop>0:
         result['adaptive_intelligence']['dynamic_position_size']=dynamic_risk_size(equity,entry,stop,float(result.get('risk_fraction',.005) or .005),probability=p['calibrated'],edge=float(result.get('historical_edge',0) or 0),regime_confidence=regime['confidence'],liquidity_score=float(result.get('liquidity_score',.7) or .7),execution_score=max(0.,1.-float(result.get('expected_slippage_bps',0) or 0)/20.),degradation_multiplier=float(result.get('strategy_degradation',{}).get('capital_multiplier',1.) or 1.))
@@ -73,7 +77,7 @@ def _adaptive(result,market_data,ledger,equity):
     result['adaptive_intelligence']['self_critique']=critique
     if not critique['passed'] and result.get('decision')=='TRADE':
         result['decision']='NO_TRADE'; result.setdefault('reasons',[]).extend(['adaptive self-critique failed']+critique['failures'])
-    if result['adaptive_intelligence']['counterfactual'].get('survives_all') is False and result.get('decision')=='TRADE':
+    if net_ev is not None and result['adaptive_intelligence']['counterfactual'].get('survives_all') is False and result.get('decision')=='TRADE':
         result['decision']='NO_TRADE'; result.setdefault('reasons',[]).append('trade thesis fails stressed net-EV scenarios')
     if result['adaptive_intelligence']['signal_half_life'].get('stale') and result.get('decision')=='TRADE':
         result['decision']='NO_TRADE'; result.setdefault('reasons',[]).append('signal edge is stale')
