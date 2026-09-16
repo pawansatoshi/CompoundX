@@ -5,6 +5,7 @@ from urllib.parse import parse_qs,urlparse
 BACKEND=Path(__file__).resolve().parents[2]/'backend'
 if str(BACKEND) not in sys.path: sys.path.insert(0,str(BACKEND))
 from compoundx.autonomous_intelligence import build_autonomous_intelligence
+from compoundx.adaptive_intelligence import adaptive_snapshot,calibrated_probability,counterfactual_matrix,dynamic_risk_size,evidence_dependency,regime_distribution,self_critique,signal_half_life
 from compoundx.db import connection,is_configured
 from compoundx.derivatives_gate import final_derivatives_options_gate,derivatives_options_advisory
 from compoundx.economic_calendar import committee_calendar_gate,fetch_calendar
@@ -42,7 +43,6 @@ def _strategy_research(market_data,derivatives):
     candidates=[generate(h,l,c,v,s,derivatives) for s in STRATEGIES]
     candidates=[x for x in candidates if x.get('side')!='NONE']
     best=select_best(candidates,'UNKNOWN')
-    # The backtest is research-only and uses only data preceding each generated signal.
     best_bt=run_backtest(candles,best.get('strategy','trend_following')) if best.get('strategy')!='none' else {'usable':False,'reason':'no candidate strategy'}
     return {'usable':True,'candidates':sorted(candidates,key=lambda x:x.get('score',0),reverse=True),'selected_hypothesis':best,'historical_backtest':best_bt,'research_only':True}
 
@@ -50,6 +50,33 @@ def _apply_research(result,ledger,market_data,derivatives):
     features=['open','high','low','close','volume','ema20','ema50','ema200','vwap','rsi','atr','market_structure','spread_bps','depth','funding_rate','open_interest','expiry_distance','macro_risk','news_score','regime']
     research=build_research_intelligence(market_data={},market_summary=result,trades=ledger.get('trades',[]),feature_names=features); result['research_intelligence']=research; result['research_gate']='PASS' if research.get('research_ready') else 'NOT_CERTIFIED'
     result['strategy_research']=_strategy_research(market_data,derivatives)
+    return result
+
+def _adaptive(result,market_data,ledger,equity):
+    regime_rows={}
+    for tf,payload in (market_data or {}).items():
+        if isinstance(payload,dict):
+            regime_rows[tf]={'usable':True,'regime':payload.get('regime',result.get('regime','UNKNOWN')),'direction':payload.get('direction',result.get('direction_label','NONE'))}
+    regime=regime_distribution(regime_rows)
+    result['adaptive_intelligence']=adaptive_snapshot(result.get('autonomous_intelligence',{}),baseline=result.get('strategy_baseline'),specialist_records=result.get('specialist_calibration',[]))
+    result['adaptive_intelligence']['regime_distribution']=regime
+    result['adaptive_intelligence']['evidence_dependency']=evidence_dependency(result.get('autonomous_intelligence',{}).get('votes',[]))
+    p=calibrated_probability(float(result.get('score',0.5) or 0.5),float(result.get('adaptive_intelligence',{}).get('probability',{}).get('calibrated',0.5) or 0.5),float(result.get('uncertainty',0.0) or 0.0))
+    result['adaptive_intelligence']['final_probability']=p
+    net_ev=float(result.get('net_expected_value',result.get('expected_value',0.0)) or 0.0)
+    result['adaptive_intelligence']['counterfactual']=counterfactual_matrix(net_ev,float(result.get('execution_cost',0.0) or 0.0))
+    entry=float(result.get('entry_price',0) or 0); stop=float(result.get('stop_loss',0) or 0)
+    if entry>0 and stop>0:
+        result['adaptive_intelligence']['dynamic_position_size']=dynamic_risk_size(equity,entry,stop,float(result.get('risk_fraction',.005) or .005),probability=p['calibrated'],edge=float(result.get('historical_edge',0) or 0),regime_confidence=regime['confidence'],liquidity_score=float(result.get('liquidity_score',.7) or .7),execution_score=max(0.,1.-float(result.get('expected_slippage_bps',0) or 0)/20.),degradation_multiplier=float(result.get('strategy_degradation',{}).get('capital_multiplier',1.) or 1.))
+    result['adaptive_intelligence']['signal_half_life']=signal_half_life(float(result.get('signal_age_seconds',0) or 0),float(result.get('signal_half_life_seconds',900) or 900))
+    critique=self_critique(thesis=str(result.get('thesis',result.get('selected_hypothesis',{}).get('reason',''))),supporting=list(result.get('supporting_evidence',[])),contradicting=list(result.get('contradicting_evidence',[])),missing=list(result.get('missing_evidence',[])),invalidation=str(result.get('invalidation',result.get('stop_reason',''))),probability=p['calibrated'],calibrated_lower_bound=p['lower_bound'],net_ev=net_ev)
+    result['adaptive_intelligence']['self_critique']=critique
+    if not critique['passed'] and result.get('decision')=='TRADE':
+        result['decision']='NO_TRADE'; result.setdefault('reasons',[]).extend(['adaptive self-critique failed']+critique['failures'])
+    if result['adaptive_intelligence']['counterfactual'].get('survives_all') is False and result.get('decision')=='TRADE':
+        result['decision']='NO_TRADE'; result.setdefault('reasons',[]).append('trade thesis fails stressed net-EV scenarios')
+    if result['adaptive_intelligence']['signal_half_life'].get('stale') and result.get('decision')=='TRADE':
+        result['decision']='NO_TRADE'; result.setdefault('reasons',[]).append('signal edge is stale')
     return result
 
 def _apply_intelligence(result,symbol,market_data,derivatives,expiry,expiry_market_data,equity):
@@ -64,7 +91,7 @@ def _apply_intelligence(result,symbol,market_data,derivatives,expiry,expiry_mark
     result['derivatives_options_gate']=final_derivatives_options_gate(derivatives,expiry,expiry_market_data)
     result['strategy_ranking']=rank_strategy(result.get('research_intelligence',{}),portfolio_fit=max(.1,pg.get('marginal_risk',1.)),regime_fit=float(result.get('autonomous_intelligence',{}).get('regime',{}).get('confidence',1.) or 1.))
     result['strategy_degradation']=degradation_monitor(result.get('research_intelligence',{}))
-    return result
+    return _adaptive(result,market_data,ledger,equity)
 
 def _scan(symbol,exchange_id,sandbox,equity,limit):
     gateway=ExchangeGateway(exchange_id=exchange_id,sandbox=sandbox); md=gateway.multi_timeframe_market_data(symbol,limit=limit,orderbook_limit=100); d=gateway.derivatives_market_data(symbol); ed=gateway.expiry_market_data(symbol,limit=100); e=analyze_expiries(ed.get('instruments'),market_type=ed.get('market_type','spot'))
