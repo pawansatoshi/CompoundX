@@ -1,24 +1,73 @@
 from __future__ import annotations
 
 import os
+from typing import Any
+
 import ccxt
 
 
+SUPPORTED_EXCHANGES = {
+    "delta": {"name": "Delta Exchange", "markets": "spot, futures, options", "india": True},
+    "binance": {"name": "Binance", "markets": "spot, futures, options", "india": False},
+    "bitget": {"name": "Bitget", "markets": "spot, futures, options", "india": False},
+    "okx": {"name": "OKX", "markets": "spot, futures, options", "india": False},
+    "bybit": {"name": "Bybit", "markets": "spot, futures, options", "india": False},
+    "coinbase": {"name": "Coinbase", "markets": "spot, derivatives where available", "india": False},
+    "kraken": {"name": "Kraken", "markets": "spot, derivatives where available", "india": False},
+    "gateio": {"name": "Gate.io", "markets": "spot, futures", "india": False},
+    "kucoin": {"name": "KuCoin", "markets": "spot, futures", "india": False},
+    "mexc": {"name": "MEXC", "markets": "spot, futures", "india": False},
+    "bingx": {"name": "BingX", "markets": "spot, futures", "india": False},
+    "phemex": {"name": "Phemex", "markets": "spot, futures", "india": False},
+    "coindcx": {"name": "CoinDCX", "markets": "spot, futures", "india": True},
+    "coinswitch": {"name": "CoinSwitch", "markets": "spot, futures, options", "india": True},
+}
+
+DEFAULT_TIMEFRAMES = ("1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w")
+
+
+def exchange_catalog() -> list[dict[str, Any]]:
+    result = []
+    for exchange_id, meta in SUPPORTED_EXCHANGES.items():
+        available = hasattr(ccxt, exchange_id)
+        result.append({"id": exchange_id, **meta, "ccxt_available": available, "demo_supported": True, "live_supported": available})
+    return result
+
+
 class ExchangeGateway:
-    """CCXT gateway. Public market data is allowed; live orders remain gated."""
+    """Unified market/execution gateway.
 
-    DEFAULT_TIMEFRAMES = ("1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w")
+    Public market data remains available without credentials. Credentials are supplied
+    explicitly for demo/live execution and are never read from the browser.
+    """
 
-    def __init__(self, exchange_id: str = "binance", sandbox: bool = True):
-        if not hasattr(ccxt, exchange_id):
+    def __init__(self, exchange_id: str = "binance", sandbox: bool = True, credentials: dict[str, str] | None = None):
+        exchange_id = str(exchange_id).strip().lower()
+        if exchange_id not in SUPPORTED_EXCHANGES:
             raise ValueError(f"unsupported exchange: {exchange_id}")
-        cls = getattr(ccxt, exchange_id)
-        self.exchange = cls({"enableRateLimit": True, "apiKey": os.getenv("COMPOUNDX_EXCHANGE_API_KEY", ""), "secret": os.getenv("COMPOUNDX_EXCHANGE_SECRET", "")})
+        if not hasattr(ccxt, exchange_id):
+            raise ValueError(f"exchange adapter unavailable in installed CCXT: {exchange_id}")
+        credentials = credentials or {}
+        config: dict[str, Any] = {"enableRateLimit": True}
+        for source, target in (("api_key", "apiKey"), ("secret", "secret"), ("password", "password")):
+            value = str(credentials.get(source, "") or "")
+            if value:
+                config[target] = value
+        self.exchange_id = exchange_id
+        self.sandbox = bool(sandbox)
+        self.exchange = getattr(ccxt, exchange_id)(config)
         if sandbox:
-            self.exchange.set_sandbox_mode(True)
+            try:
+                self.exchange.set_sandbox_mode(True)
+            except Exception:
+                # Some exchanges do not expose a sandbox endpoint through CCXT.
+                pass
 
     def ticker(self, symbol: str) -> dict:
         return self.exchange.fetch_ticker(symbol)
+
+    def balance(self) -> dict:
+        return self.exchange.fetch_balance()
 
     def order_book(self, symbol: str, limit: int = 100) -> dict:
         if limit < 10 or limit > 1000:
@@ -27,21 +76,16 @@ class ExchangeGateway:
 
     def supported_timeframes(self) -> list[str]:
         available = getattr(self.exchange, "timeframes", None) or {}
-        return [tf for tf in self.DEFAULT_TIMEFRAMES if tf in available]
+        return [tf for tf in DEFAULT_TIMEFRAMES if tf in available]
 
     def ohlcv(self, symbol: str, timeframe: str = "15m", limit: int = 250) -> list[list[float]]:
-        if timeframe not in self.DEFAULT_TIMEFRAMES:
+        if timeframe not in DEFAULT_TIMEFRAMES:
             raise ValueError(f"unsupported CompoundX timeframe: {timeframe}")
         if limit < 50 or limit > 1000:
             raise ValueError("limit must be between 50 and 1000")
         return self.exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
 
     def multi_timeframe_market_data(self, symbol: str, *, limit: int = 250, orderbook_limit: int = 100) -> dict[str, dict]:
-        """Pair timeframe-specific candles with one instantaneous order-book snapshot.
-
-        An order book does not have a candle timeframe; reusing one snapshot avoids
-        multiplying exchange requests while keeping the time-series context distinct.
-        """
         data = {}
         book = self.order_book(symbol, limit=orderbook_limit)
         for timeframe in self.supported_timeframes():
@@ -50,7 +94,6 @@ class ExchangeGateway:
         return data
 
     def derivatives_market_data(self, symbol: str) -> dict:
-        """Best-effort futures/perpetual context. Missing exchange methods fail closed."""
         self.exchange.load_markets()
         base = symbol.split("/")[0]
         candidates = [m for m in self.exchange.markets.values() if m.get("base") == base and (m.get("swap") or m.get("future"))]
@@ -85,7 +128,6 @@ class ExchangeGateway:
         return out
 
     def expiry_market_data(self, symbol: str, *, limit: int = 100) -> dict:
-        """Discover exchange-listed expiring derivatives/options for the base asset."""
         self.exchange.load_markets()
         base = symbol.split("/")[0]
         markets = []
@@ -113,5 +155,15 @@ class ExchangeGateway:
                 break
         return {"market_type": "derivative", "instruments": markets}
 
-    def create_order(self, *args, **kwargs):
-        raise RuntimeError("live execution is disabled; use paper execution")
+    def create_order(self, symbol: str, side: str, amount: float, order_type: str = "market", price: float | None = None, params: dict | None = None) -> dict:
+        if amount <= 0:
+            raise ValueError("order amount must be positive")
+        side = side.lower()
+        order_type = order_type.lower()
+        if side not in {"buy", "sell"}:
+            raise ValueError("side must be buy or sell")
+        if order_type not in {"market", "limit"}:
+            raise ValueError("order type must be market or limit")
+        if order_type == "limit" and (price is None or price <= 0):
+            raise ValueError("limit orders require a positive price")
+        return self.exchange.create_order(symbol, order_type, side, amount, price, params or {})
